@@ -68,6 +68,18 @@ public static class Lexer
             return c;
         }
 
+        // Whether there is nothing but whitespace between the start of the line and where the lexer is
+        bool AtLineStart()
+        {
+            for (int back = index - 1; back >= 0 && src[back] != '\n'; back--)
+            {
+                if (!char.IsWhiteSpace(src[back]))
+                    return false;
+            }
+
+            return true;
+        }
+
         void Add(TokenType type, string value, int startLine, int startCol) =>
             tokens.Add(new Token(type, value, startLine, startCol, startIndex, index - startIndex));
 
@@ -84,6 +96,17 @@ public static class Lexer
             int startLine = line;
             int startCol = col;
             startIndex = index;
+
+            // A directive, a # first on its line, to the end of it (see HIDLPreprocessor)
+            if (current == '#' && AtLineStart())
+            {
+                StringBuilder sb = new();
+                while (Peek() != '\0' && Peek() != '\n' && Peek() != '\r')
+                    sb.Append(Consume());
+
+                Add(TokenType.Directive, sb.ToString(), startLine, startCol);
+                continue;
+            }
 
             // Comments, to the end of the line or to the closing star
             if (current == '/' && Peek(1) == '/')

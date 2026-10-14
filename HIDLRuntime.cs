@@ -63,6 +63,21 @@ public class HIDLRuntime
     /// </summary>
     public Func<string, string?, string>? IncludeReader { get; set; }
 
+    /// <summary>
+    /// What is defined, by the host before a program runs (<see cref="Define"/>) and by the programs it runs with
+    /// #define, which stays after them for the host to ask about. A program asks with defined("name") and
+    /// definition("name"). See <see cref="Preprocessing.HIDLPreprocessor"/>.
+    /// </summary>
+    public Dictionary<string, string> Defines { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Defines a name for what is run from now on, with a value or without one.</summary>
+    public void Define(string name, string value = "") => Defines[name] = value;
+
+    public bool IsDefined(string name) => Defines.ContainsKey(name);
+
+    /// <summary>Helper method to take the directives out of a program, what it defines going into <see cref="Defines"/>.</summary>
+    private string Preprocess(string source) => Preprocessing.HIDLPreprocessor.Process(source, Defines);
+
     // Files that are being included right now, to catch a file that includes itself
     private readonly Stack<string> including = new();
 
@@ -120,7 +135,7 @@ public class HIDLRuntime
 
         try
         {
-            value = Run(Parse(input), scratch);
+            value = Run(Parse(Preprocess(input)), scratch);
             success = true;
         }
         catch
@@ -140,7 +155,7 @@ public class HIDLRuntime
     {
         try
         {
-            IRuntimeValue value = Run(Parse(input), useGlobalScope ? GlobalScope : UserScope);
+            IRuntimeValue value = Run(Parse(Preprocess(input)), useGlobalScope ? GlobalScope : UserScope);
             return (true, Values.Text(value));
         }
         catch (Exception e)
@@ -152,7 +167,7 @@ public class HIDLRuntime
     /// <summary>
     /// Runs a program and hands back its last value, throwing with what went wrong if it didn't work.
     /// </summary>
-    public IRuntimeValue Run(in string input) => Run(Parse(input), UserScope);
+    public IRuntimeValue Run(in string input) => Run(Parse(Preprocess(input)), UserScope);
 
     /// <summary>
     /// Runs a program from a file, with include looking next to it. Throws with the file and what went wrong.
@@ -166,7 +181,7 @@ public class HIDLRuntime
         BaseDirectory = Path.GetDirectoryName(Path.GetFullPath(path));
         try
         {
-            return Run(Parse(File.ReadAllText(path)), UserScope);
+            return Run(Parse(Preprocess(File.ReadAllText(path))), UserScope);
         }
         catch (Exception e) when (e is not FileNotFoundException)
         {
@@ -218,6 +233,10 @@ public class HIDLRuntime
     /// </summary>
     public static ProgramStatement Parse(in string input) => new Parser().ProduceSyntaxTree(Lexer.Tokenize(input));
 
+    /// <summary>Parses a program after its directives have had their say, with nothing defined but what it defines itself.</summary>
+    public static ProgramStatement ParseWithDirectives(string input) =>
+        Parse(Preprocessing.HIDLPreprocessor.Process(input, new Dictionary<string, string>(StringComparer.Ordinal)));
+
     /// <summary>
     /// What include("file.hor") does. The file is run in a scope of its own over the global one and everything it
     /// declared comes back as an object, so <c>include("shared.hor").moves</c> is the moves of that file.
@@ -242,7 +261,9 @@ public class HIDLRuntime
         BaseDirectory = Path.GetDirectoryName(full);
         try
         {
-            Interpreter.Evaluate(Parse(source), scope);
+            // What an included file defines is its own, what the host and the file that included it defined it sees
+            var defines = new Dictionary<string, string>(Defines, StringComparer.Ordinal);
+            Interpreter.Evaluate(Parse(Preprocessing.HIDLPreprocessor.Process(source, defines)), scope);
         }
         catch (HidlRuntimeException e)
         {

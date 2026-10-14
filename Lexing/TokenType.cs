@@ -52,4 +52,8 @@ public enum TokenType : byte
 
     // A character the language has no use for, which only the lenient lexing of an editor hands out
     Unknown,
+
+    // A line that starts with a #, for whoever runs the program and not for the program (see HIDLPreprocessor). The
+    // parser never sees it, an editor colours it
+    Directive,
 }

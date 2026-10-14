@@ -64,5 +64,11 @@ public static class CoreLibrary
         // include("other.hor") runs another file and hands back an object of everything it declared.
         // The path is next to the file that is running, or wherever the runtime was told its files are
         scope.Declare("include", Natives.Function("include", args => runtime.Include(args.Text(0))), true);
+
+        // defined("layout") says whether a name was defined, by the host or a #define, and definition("version") what
+        // it was defined as, null for a name that wasn't
+        scope.Declare("defined", Natives.Function("defined", args => new BooleanValue(runtime.IsDefined(args.Text(0)))), true);
+        scope.Declare("definition", Natives.Function("definition", args =>
+            runtime.Defines.TryGetValue(args.Text(0), out string? value) ? new StringValue(value) : (IRuntimeValue)new NullValue()), true);
     }
 }

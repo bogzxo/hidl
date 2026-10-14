@@ -62,7 +62,7 @@ public class Parser
     public ProgramStatement ProduceSyntaxTree(in Token[] inputTokens)
     {
         // Comments are for people, the parser never sees them
-        Tokens = new Queue<Token>(inputTokens.Where(token => token.Type != TokenType.Comment));
+        Tokens = new Queue<Token>(inputTokens.Where(token => token.Type is not (TokenType.Comment or TokenType.Directive)));
         List<IStatement> statements = [];
 
         while (!Next(TokenType.EndOfFile))
