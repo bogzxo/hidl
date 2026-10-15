@@ -10,19 +10,25 @@ public class Environment
 {
     public Environment? Parent { get; init; }
 
-    private readonly Dictionary<string, IRuntimeValue> systemVariables = [];
-    private readonly Dictionary<string, IRuntimeValue> variables = [];
-    private readonly HashSet<string> constants = [];
+    // Made when something is first put in them. A scope is made for every call and every turn of a for, and the
+    // system variables are only ever in the user scope, three collections a scope was most of the garbage of a call
+    private Dictionary<string, IRuntimeValue>? systemVariables;
+    private Dictionary<string, IRuntimeValue>? variables;
+    private HashSet<string>? constants;
+
+    private static readonly Dictionary<string, IRuntimeValue> Nothing = [];
 
     /// <summary>
     /// The variables declared in this scope itself, without the ones of its parents or its system variables.
     /// </summary>
-    public IReadOnlyDictionary<string, IRuntimeValue> Variables => variables;
+    public IReadOnlyDictionary<string, IRuntimeValue> Variables => variables ?? Nothing;
 
     /// <summary>
     /// Whether a variable of this scope was declared as a constant.
     /// </summary>
-    public bool IsConstant(in string name) => constants.Contains(name);
+    public bool IsConstant(in string name) => constants?.Contains(name) == true;
+
+    private bool Holds(string name) => variables?.ContainsKey(name) == true || systemVariables?.ContainsKey(name) == true;
 
     /// <param name="parent">The scope this one sits inside of, null for the outermost.</param>
     /// <param name="copy">Whether to take a copy of everything the parent holds instead of looking things up in it.</param>
@@ -44,12 +50,12 @@ public class Environment
     /// </summary>
     public IRuntimeValue Declare(in string identifier, in IRuntimeValue? value, in bool isConst = false)
     {
-        if (variables.ContainsKey(identifier) || systemVariables.ContainsKey(identifier))
+        if (Holds(identifier))
             throw new HidlRuntimeException($"There is a '{identifier}' already, use another name or assign to it.");
 
         IRuntimeValue stored = value ?? Values.Null;
-        variables.Add(identifier, stored);
-        if (isConst) constants.Add(identifier);
+        (variables ??= []).Add(identifier, stored);
+        if (isConst) (constants ??= []).Add(identifier);
         return stored;
     }
 
@@ -58,10 +64,10 @@ public class Environment
     /// </summary>
     public IRuntimeValue DeclareSystem(in string identifier, in IRuntimeValue value)
     {
-        if (systemVariables.ContainsKey(identifier))
+        if (systemVariables?.ContainsKey(identifier) == true)
             throw new HidlRuntimeException($"The system variable '{identifier}' exists already.");
 
-        systemVariables.Add(identifier, value);
+        (systemVariables ??= []).Add(identifier, value);
         return value;
     }
 
@@ -74,14 +80,14 @@ public class Environment
         if (owner is null)
             throw new HidlRuntimeException($"There is no '{name}' to assign to, declare it with let first.");
 
-        if (owner.constants.Contains(name))
+        if (owner.IsConstant(name))
             throw new HidlRuntimeException($"'{name}' is a constant, it can't be changed.");
 
-        if (owner.systemVariables.ContainsKey(name))
+        if (owner.systemVariables?.ContainsKey(name) == true)
             throw new HidlRuntimeException($"'{name}' belongs to the program, it can't be assigned to.");
 
         // A value the host owns is handed to the host rather than replaced
-        if (owner.variables[name] is NativeValue native)
+        if (owner.variables![name] is NativeValue native)
         {
             native.MutatorCallback(value);
             return native.AccessorCallback();
@@ -96,9 +102,9 @@ public class Environment
     /// </summary>
     public void Reset(in bool resetSystem = false)
     {
-        variables.Clear();
-        constants.Clear();
-        if (resetSystem) systemVariables.Clear();
+        variables?.Clear();
+        constants?.Clear();
+        if (resetSystem) systemVariables?.Clear();
     }
 
     /// <summary>
@@ -109,7 +115,7 @@ public class Environment
         Environment? owner = Resolve(name);
         if (owner is null) return Values.Null;
 
-        return owner.variables.TryGetValue(name, out IRuntimeValue? value) ? value : owner.systemVariables[name];
+        return owner.variables?.TryGetValue(name, out IRuntimeValue? value) == true ? value : owner.systemVariables![name];
     }
 
     /// <summary>
@@ -124,7 +130,7 @@ public class Environment
     {
         for (Environment? scope = this; scope is not null; scope = scope.Parent)
         {
-            if (scope.variables.ContainsKey(name) || scope.systemVariables.ContainsKey(name))
+            if (scope.Holds(name))
                 return scope;
         }
 
@@ -143,10 +149,10 @@ public class Environment
                 result[item.Key] = item.Value;
         }
 
-        foreach (var item in systemVariables)
+        foreach (var item in systemVariables ?? Nothing)
             result[item.Key] = item.Value;
 
-        foreach (var item in variables)
+        foreach (var item in variables ?? Nothing)
             result[item.Key] = item.Value;
 
         return result;
@@ -157,21 +163,14 @@ public class Environment
     /// </summary>
     public void Delete(string target)
     {
-        variables.Remove(target);
-        constants.Remove(target);
+        variables?.Remove(target);
+        constants?.Remove(target);
     }
 
     internal void Copy(Environment other)
     {
-        constants.Clear();
-        constants.UnionWith(other.constants);
-
-        variables.Clear();
-        foreach (var item in other.variables)
-            variables.Add(item.Key, item.Value);
-
-        systemVariables.Clear();
-        foreach (var item in other.systemVariables)
-            systemVariables.Add(item.Key, item.Value);
+        constants = other.constants is null ? null : [.. other.constants];
+        variables = other.variables is null ? null : new Dictionary<string, IRuntimeValue>(other.variables);
+        systemVariables = other.systemVariables is null ? null : new Dictionary<string, IRuntimeValue>(other.systemVariables);
     }
 }

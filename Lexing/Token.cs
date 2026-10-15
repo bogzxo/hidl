@@ -1,4 +1,4 @@
-﻿namespace Horizon.HIDL.Lexing;
+namespace Horizon.HIDL.Lexing;
 
 /// <summary>
 /// One piece of a program. What it is, what it says, and where it was in the source, which is what an error points
@@ -14,6 +14,9 @@ public readonly struct Token(in TokenType type, in string value, in int line = 1
     public int Col { get; init; } = col;
     public int Index { get; init; } = index;
     public int Length { get; init; } = length;
+
+    /// <summary>The number a <see cref="TokenType.Number"/> token is, worked out by the lexer.</summary>
+    public float Number { get; init; }
 
     public override string ToString()
     {

@@ -14,5 +14,8 @@ public enum ValueType : byte
     Vector2,
     Vector3,
     Vector4,
-    List
+    List,
+
+    // A thing of the host's whose members it answers for, see IHostValue
+    Host
 }

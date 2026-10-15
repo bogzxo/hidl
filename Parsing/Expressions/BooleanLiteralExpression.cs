@@ -1,9 +1,9 @@
-﻿namespace Horizon.HIDL.Parsing;
+namespace Horizon.HIDL.Parsing;
 
-public readonly struct BooleanLiteralExpression(in bool value) : IExpression
+public sealed class BooleanLiteralExpression(in bool value) : IExpression
 {
-    public readonly NodeType Type { get; init; } = NodeType.BooleanLiteral;
-    public readonly bool Value { get; init; } = value;
+    public NodeType Type { get; init; } = NodeType.BooleanLiteral;
+    public bool Value { get; init; } = value;
 
     public override string ToString() => Value.ToString();
 }

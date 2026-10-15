@@ -58,6 +58,18 @@ public static class CoreLibrary
             return new StringValue(line);
         }), true);
 
+        // merge(base, over, ...) is base with what over says on top, all the way down. An object in both is merged in
+        // turn, anything else (a number, a list) over has is what it is. How a character's own moves go over the shared
+        // ones, or a game's options over its defaults, without spelling out every key again. Nothing given is changed
+        scope.Declare("merge", Natives.Function("merge", args =>
+        {
+            IRuntimeValue merged = args[0];
+            for (int i = 1; i < args.Count; i++)
+                merged = Merge(merged, args[i]);
+
+            return merged;
+        }), true);
+
         // error("message") stops the program with a message of the script's own
         scope.Declare("error", Natives.Function("error", args => throw new HidlRuntimeException(args.Text(0, "The script said stop."))), true);
 
@@ -70,5 +82,18 @@ public static class CoreLibrary
         scope.Declare("defined", Natives.Function("defined", args => new BooleanValue(runtime.IsDefined(args.Text(0)))), true);
         scope.Declare("definition", Natives.Function("definition", args =>
             runtime.Defines.TryGetValue(args.Text(0), out string? value) ? new StringValue(value) : (IRuntimeValue)new NullValue()), true);
+    }
+
+    /// <summary>One value over another, objects key by key and the rest replaced, see merge above.</summary>
+    public static IRuntimeValue Merge(IRuntimeValue under, IRuntimeValue over)
+    {
+        if (under is not ObjectValue below || over is not ObjectValue above)
+            return over is NullValue ? under : over;
+
+        var merged = new Dictionary<string, IRuntimeValue>(below.Properties);
+        foreach (var (key, value) in above.Properties)
+            merged[key] = merged.TryGetValue(key, out IRuntimeValue? was) ? Merge(was, value) : value;
+
+        return new ObjectValue(merged);
     }
 }

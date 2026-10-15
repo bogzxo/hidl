@@ -17,6 +17,20 @@ public class HIDLInterpreter
     // How many turns a loop gets before it is taken to have run away
     private const int MAX_LOOP_TURNS = 1_000_000;
 
+    // How deep calls go before a function that calls itself is taken to never stop. Past this the stack of the thread
+    // runs out, and a stack overflow takes the whole process with it, there is no catching one in .NET. An editor that
+    // runs a file as it is typed (Hex) can't have a typo kill it
+    public const int MAX_CALL_DEPTH = 256;
+
+    // How deep in calls the program is right now
+    private int depth;
+
+    /// <summary>
+    /// Stops whatever is running when it is cancelled, looked at every turn of a loop and every call. For a host that
+    /// runs a program it may not want the end of, a newer edit of the file came along say.
+    /// </summary>
+    public CancellationToken Cancellation { get; set; }
+
     private enum Flow
     {
         None,
@@ -31,12 +45,47 @@ public class HIDLInterpreter
 
     public IRuntimeValue Evaluate(IStatement statement, Environment env)
     {
+        try
+        {
+            return EvaluateNode(statement, env);
+        }
+        catch (HidlRuntimeException e) when (e.Line == 0 && statement.Span.IsKnown)
+        {
+            // The nearest node that knows where it was written says where, on the way out
+            e.Place(HIDLRuntime.Current?.SourceFile, statement.Span);
+            throw;
+        }
+    }
+
+    // Where the values are being written down as they are made, for whoever asked (an editor), see HIDLSourceMap
+    private static HIDLSourceMap? Sources => HIDLRuntime.Current?.Sources;
+
+    private static SourceLocation At(SourceSpan span) => new(HIDLRuntime.Current?.SourceFile, span);
+
+    private static SourceLocation At(SourceSpan span, SourceSpan value, IExpression? written, string? doc = null) =>
+        new(HIDLRuntime.Current?.SourceFile, span, value, IsLiteral(written), doc);
+
+    /// <summary>
+    /// Whether a value is written as itself, a number (a minus in front or not), a text, true, false, null or a vec of
+    /// numbers, which an editor can change by changing that text.
+    /// </summary>
+    private static bool IsLiteral(IExpression? written) => written switch
+    {
+        NumericLiteralExpression or StringLiteralExpression or BooleanLiteralExpression or NullLiteral => true,
+        BinaryExpression { Right: null, Operator: "-" or "+", Left: NumericLiteralExpression } => true,
+        VectorDeclarationExpression vector => vector.Expressions.All(IsLiteral),
+        _ => false
+    };
+
+    private IRuntimeValue EvaluateNode(IStatement statement, Environment env)
+    {
         return statement.Type switch
         {
             NodeType.Program => EvaluateProgram((ProgramStatement)statement, env),
-            NodeType.NumericLiteral => new NumberValue(((NumericLiteralExpression)statement).Value),
+            NodeType.NumericLiteral => ((NumericLiteralExpression)statement) is { Constant: { } number } ? number : new NumberValue(((NumericLiteralExpression)statement).Value),
             NodeType.BooleanLiteral => Values.Bool(((BooleanLiteralExpression)statement).Value),
-            NodeType.StringLiteral => new StringValue(((StringLiteralExpression)statement).Value),
+            NodeType.StringLiteral => ((StringLiteralExpression)statement) is { Constant: { } text } ? text : new StringValue(((StringLiteralExpression)statement).Value),
+            NodeType.Template => EvaluateTemplate((TemplateExpression)statement, env),
             NodeType.NullLiteral => Values.Null,
             NodeType.Identifier => EvaluateIdentifier((IdentifierExpression)statement, env),
             NodeType.BinaryExpression => EvaluateBinaryExpression((BinaryExpression)statement, env),
@@ -158,10 +207,12 @@ public class HIDLInterpreter
                 foreach (var (key, value) in source.Properties)
                     properties[key] = value is NativeValue native ? native.AccessorCallback() : value;
 
+                Sources?.Spread(source.Properties, properties);
                 continue;
             }
 
             properties[property.Key] = property.Value is null ? env.Lookup(property.Key) : Evaluate(property.Value, env);
+            Sources?.Key(properties, property.Key, At(property.Span, property.ValueSpan, property.Value, property.Doc));
         }
 
         return new ObjectValue(properties);
@@ -170,19 +221,24 @@ public class HIDLInterpreter
     private IRuntimeValue EvaluateListLiteral(ListLiteralExpression statement, Environment env)
     {
         List<IRuntimeValue> items = new(statement.Items.Length);
+        HIDLSourceMap? sources = Sources;
 
-        foreach (IExpression item in statement.Items)
+        for (int i = 0; i < statement.Items.Length; i++)
         {
+            IExpression item = statement.Items[i];
             if (item is SpreadExpression spread)
             {
                 IRuntimeValue source = Evaluate(spread.Source, env);
                 if (source is not ListValue list)
                     throw new HidlRuntimeException($"Only a list can be spread into a list, not {Values.TypeName(source)}.");
 
+                sources?.SpreadItems(list.Items, items, items.Count);
                 items.AddRange(list.Items);
                 continue;
             }
 
+            if (sources is not null && i < statement.ItemSpans.Length)
+                sources.Item(items, items.Count, At(statement.ItemSpans[i], i < statement.ItemValueSpans.Length ? statement.ItemValueSpans[i] : default, item));
             items.Add(Evaluate(item, env));
         }
 
@@ -197,12 +253,17 @@ public class HIDLInterpreter
 
     /* Declarations and assignments */
 
-    private IRuntimeValue EvaluateVariableDeclaration(VariableDeclarationExpression statement, Environment env) =>
-        env.Declare(statement.Identifier, statement.Value is null ? null : Evaluate(statement.Value, env), statement.ReadOnly);
+    private IRuntimeValue EvaluateVariableDeclaration(VariableDeclarationExpression statement, Environment env)
+    {
+        IRuntimeValue declared = env.Declare(statement.Identifier, statement.Value is null ? null : Evaluate(statement.Value, env), statement.ReadOnly);
+        Sources?.Declaration(statement.Identifier, At(statement.Span, statement.ValueSpan, statement.Value, statement.Doc));
+        return declared;
+    }
 
     private IRuntimeValue EvaluateFunctionDeclaration(FunctionDeclarationExpression statement, Environment env)
     {
         var function = new FunctionValue(statement.Name, statement.Parameters, env, statement.Body);
+        Sources?.Declaration(statement.Name, At(statement.Span) with { Doc = statement.Doc });
 
         // Declaring a function again replaces it, which is how a file can fix up another one
         return env.Resolve(statement.Name) == env ? env.Assign(statement.Name, function) : env.Declare(statement.Name, function);
@@ -287,6 +348,10 @@ public class HIDLInterpreter
                     _ => throw new HidlRuntimeException("A component can only be changed on a vector that is kept somewhere.")
                 };
             }
+
+            case IHostValue host:
+                host.Set(KeyOf(member, env), value);
+                return value;
 
             default:
                 throw new HidlRuntimeException($"Nothing can be assigned into {Values.TypeName(target)}.");
@@ -379,11 +444,47 @@ public class HIDLInterpreter
                 return new NumberValue(components[ComponentIndex(name, count)]);
             }
 
+            // A thing of the host's, which answers for its own members
+            case IHostValue host:
+                return host.Get(KeyOf(expression, env));
+
+            case NullValue when expression.Optional:
+                return Values.Null;
+
             case NullValue:
-                throw new HidlRuntimeException($"There is nothing to get '{KeyOf(expression, env)}' from, the value is null.");
+                throw new HidlRuntimeException($"There is nothing to get '{KeyOf(expression, env)}' from, the value is null. a?.b is null when a is.");
 
             default:
                 return Values.Null;
+        }
+    }
+
+    // What a template is put together in, kept, a template is often evaluated every tick (a label's text)
+    [ThreadStatic]
+    private static System.Text.StringBuilder? templated;
+
+    private IRuntimeValue EvaluateTemplate(TemplateExpression template, Environment env)
+    {
+        // The holes can be templates themselves, so the builder is only borrowed while nobody inside is using it
+        System.Text.StringBuilder text = templated ?? new System.Text.StringBuilder();
+        templated = null;
+        text.Clear();
+
+        try
+        {
+            for (int i = 0; i < template.Holes.Length; i++)
+            {
+                text.Append(template.Parts[i]);
+                IRuntimeValue value = Evaluate(template.Holes[i], env);
+                text.Append(value is StringValue said ? said.Value : Values.Text(value));
+            }
+
+            text.Append(template.Parts[^1]);
+            return new StringValue(text.ToString());
+        }
+        finally
+        {
+            templated = text;
         }
     }
 
@@ -439,6 +540,11 @@ public class HIDLInterpreter
 
     private IRuntimeValue Run(string[] parameters, Environment closure, IStatement[] body, IRuntimeValue[] args)
     {
+        if (depth >= MAX_CALL_DEPTH)
+            throw new HidlRuntimeException($"Calls went {MAX_CALL_DEPTH} deep, a function that calls itself and never stops?");
+
+        Stopped();
+
         Environment scope = new(closure);
         for (int i = 0; i < parameters.Length; i++)
             scope.Declare(parameters[i], i < args.Length ? args[i] : Values.Null);
@@ -447,14 +553,31 @@ public class HIDLInterpreter
         Flow outerFlow = flow;
         IRuntimeValue outerReturned = returned;
         flow = Flow.None;
+        depth++;
 
-        IRuntimeValue result = EvaluateBlock(body, scope);
-        if (flow == Flow.Return)
-            result = returned;
+        try
+        {
+            IRuntimeValue result = EvaluateBlock(body, scope);
+            if (flow == Flow.Return)
+                result = returned;
 
-        flow = outerFlow;
-        returned = outerReturned;
-        return result;
+            return result;
+        }
+        finally
+        {
+            // Put back whether the function came to an end or threw, an error half way down a call left the depth
+            // and a return on its way out for whatever the runtime ran next
+            depth--;
+            flow = outerFlow;
+            returned = outerReturned;
+        }
+    }
+
+    /// <summary>Helper method to stop the program where it is if whoever is running it said so.</summary>
+    private void Stopped()
+    {
+        if (Cancellation.IsCancellationRequested)
+            throw new HidlRuntimeException("Stopped before it was done.");
     }
 
     private IRuntimeValue EvaluateReturn(ReturnStatement statement, Environment env)
@@ -533,6 +656,8 @@ public class HIDLInterpreter
     /// </summary>
     private bool LeaveLoop()
     {
+        Stopped();
+
         switch (flow)
         {
             case Flow.Continue:
@@ -566,6 +691,13 @@ public class HIDLInterpreter
         }
 
         // && and || only look at the right side when they have to
+        // a ?? b, b only if a is null, and b isn't worked out otherwise
+        if (expression.Operator == "??")
+        {
+            IRuntimeValue left = Evaluate(expression.Left, env);
+            return left is NullValue ? Evaluate(expression.Right!, env) : left;
+        }
+
         if (expression.Operator == "&&")
         {
             IRuntimeValue left = Evaluate(expression.Left, env);

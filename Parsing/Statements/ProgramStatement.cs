@@ -1,11 +1,11 @@
-﻿using System.Text;
+using System.Text;
 
 namespace Horizon.HIDL.Parsing;
 
-public readonly struct ProgramStatement() : IStatement
+public sealed class ProgramStatement() : IStatement
 {
-    public readonly NodeType Type { get; init; } = NodeType.Program;
-    public readonly List<IStatement> Body { get; init; } = [];
+    public NodeType Type { get; init; } = NodeType.Program;
+    public List<IStatement> Body { get; init; } = [];
 
     public override string ToString()
     {

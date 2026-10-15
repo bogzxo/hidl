@@ -1,11 +1,11 @@
-﻿namespace Horizon.HIDL.Parsing;
+namespace Horizon.HIDL.Parsing;
 
-public readonly struct BinaryExpression(in IExpression left, in IExpression? right, in string op) : IExpression
+public sealed class BinaryExpression(in IExpression left, in IExpression? right, in string op) : IExpression
 {
-    public readonly NodeType Type { get; init; } = NodeType.BinaryExpression;
-    public readonly IExpression Left { get; init; } = left;
-    public readonly IExpression? Right { get; init; } = right;
-    public readonly string Operator { get; init; } = op;
+    public NodeType Type { get; init; } = NodeType.BinaryExpression;
+    public IExpression Left { get; init; } = left;
+    public IExpression? Right { get; init; } = right;
+    public string Operator { get; init; } = op;
 
     public override string ToString()
     {

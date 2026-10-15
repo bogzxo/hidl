@@ -1,8 +1,8 @@
-﻿namespace Horizon.HIDL.Parsing;
+namespace Horizon.HIDL.Parsing;
 
-public readonly struct AnonymousFunctionDeclarationExpression(in string[] parameters, in IStatement[] body) : IExpression
+public sealed class AnonymousFunctionDeclarationExpression(in string[] parameters, in IStatement[] body) : IExpression
 {
-    public readonly NodeType Type { get; init; } = NodeType.AnonymousFunctionDeclaration;
-    public readonly string[] Parameters { get; init; } = parameters;
-    public readonly IStatement[] Body { get; init; } = body;
+    public NodeType Type { get; init; } = NodeType.AnonymousFunctionDeclaration;
+    public string[] Parameters { get; init; } = parameters;
+    public IStatement[] Body { get; init; } = body;
 }

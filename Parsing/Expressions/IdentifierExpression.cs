@@ -1,9 +1,12 @@
-﻿namespace Horizon.HIDL.Parsing;
+namespace Horizon.HIDL.Parsing;
 
-public readonly struct IdentifierExpression(in string symbol) : IExpression
+public sealed class IdentifierExpression(in string symbol) : IExpression
 {
-    public readonly NodeType Type { get; init; } = NodeType.Identifier;
-    public readonly string Symbol { get; init; } = symbol;
+    public NodeType Type { get; init; } = NodeType.Identifier;
+    public string Symbol { get; init; } = symbol;
+
+    /// <summary>Where it was written, see <see cref="SourceSpan"/>.</summary>
+    public SourceSpan Span { get; init; }
 
     public override string ToString()
     {
