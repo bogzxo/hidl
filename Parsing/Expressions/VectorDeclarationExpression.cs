@@ -1,7 +1,7 @@
-﻿namespace Horizon.HIDL.Parsing;
+namespace Horizon.HIDL.Parsing;
 
-public readonly struct VectorDeclarationExpression(params IExpression[] valExpressions) : IExpression
+public sealed class VectorDeclarationExpression(params IExpression[] valExpressions) : IExpression
 {
-    public readonly NodeType Type { get; init; } = NodeType.VectorDeclaration;
-    public readonly IExpression[] Expressions { get; init; } = valExpressions;
+    public NodeType Type { get; init; } = NodeType.VectorDeclaration;
+    public IExpression[] Expressions { get; init; } = valExpressions;
 }

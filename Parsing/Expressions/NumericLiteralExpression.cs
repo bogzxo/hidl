@@ -1,9 +1,12 @@
-﻿namespace Horizon.HIDL.Parsing;
+namespace Horizon.HIDL.Parsing;
 
-public readonly struct NumericLiteralExpression(in float value) : IExpression
+public sealed class NumericLiteralExpression(in float value) : IExpression
 {
-    public readonly NodeType Type { get; init; } = NodeType.NumericLiteral;
-    public readonly float Value { get; init; } = value;
+    public NodeType Type { get; init; } = NodeType.NumericLiteral;
+    public float Value { get; init; } = value;
+
+    /// <summary>The value, made once by the parser, values never change so it is handed out as it is.</summary>
+    public Horizon.HIDL.Runtime.IRuntimeValue? Constant { get; init; }
 
     public override string ToString()
     {

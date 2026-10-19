@@ -52,4 +52,17 @@ public enum TokenType : byte
 
     // A character the language has no use for, which only the lenient lexing of an editor hands out
     Unknown,
+
+    // A line that starts with a #, for whoever runs the program and not for the program (see HIDLPreprocessor). The
+    // parser never sees it, an editor colours it
+    Directive,
+
+    // true and false, with the word as the value
+    Boolean,
+
+    // ?. , a member of something that may be null, null if it is
+    QuestionDot,
+
+    // A text in backticks with {expressions} in it, the value is what is between the backticks as it was written
+    Template,
 }

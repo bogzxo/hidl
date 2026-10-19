@@ -9,11 +9,13 @@ namespace Horizon.HIDL.Runtime;
 /// </summary>
 public static class Values
 {
-    public static readonly NullValue Null = new();
-    public static readonly BooleanValue True = new(true);
-    public static readonly BooleanValue False = new(false);
+    // Kept as what they are handed out as. The values are structs, typed as themselves these were boxed again every time
+    // one was handed out as an IRuntimeValue, which is every time, every true and every null a program made
+    public static readonly IRuntimeValue Null = new NullValue();
+    public static readonly IRuntimeValue True = new BooleanValue(true);
+    public static readonly IRuntimeValue False = new BooleanValue(false);
 
-    public static BooleanValue Bool(bool value) => value ? True : False;
+    public static IRuntimeValue Bool(bool value) => value ? True : False;
 
     /// <summary>
     /// A number as text. Whole numbers without a point, the rest with as many digits as it takes and no more.
@@ -70,6 +72,7 @@ public static class Values
             (Vector4Value x, Vector4Value y) => x.Value == y.Value,
             (ObjectValue x, ObjectValue y) => ReferenceEquals(x.Properties, y.Properties),
             (ListValue x, ListValue y) => ReferenceEquals(x, y),
+            (IHostValue x, IHostValue y) => x.Equals(y),
             _ => false
         };
     }
@@ -88,6 +91,7 @@ public static class Values
         Vector2Value or Vector3Value or Vector4Value => "vector",
         NativeFunctionValue or FunctionValue or AnonymousFunctionValue => "function",
         NativeValue native => TypeName(native.AccessorCallback()),
+        IHostValue host => host.TypeName,
         _ => value.Type.ToString().ToLowerInvariant()
     };
 
@@ -133,4 +137,33 @@ public static class Values
 /// <summary>
 /// Something went wrong while a program ran. The message says what in plain words, for whoever wrote the script.
 /// </summary>
-public class HidlRuntimeException(string message) : Exception(message);
+/// <summary>
+/// Something a program did that it can't. Where it happened is filled in on its way out of the node that threw it, the
+/// nearest one that knows where it was written (a declaration, a key, a name, a call), and is part of the message.
+/// </summary>
+public class HidlRuntimeException(string message) : Exception(message)
+{
+    /// <summary>The line it happened on, from 1, 0 for nowhere known.</summary>
+    public int Line { get; private set; }
+
+    /// <summary>The column, from 1.</summary>
+    public int Column { get; private set; }
+
+    /// <summary>How long what it is about is, in characters.</summary>
+    public int Length { get; private set; }
+
+    /// <summary>The file it happened in, null for the program that was run as text.</summary>
+    public string? File { get; private set; }
+
+    /// <summary>What went wrong without where.</summary>
+    public string Reason => base.Message;
+
+    public override string Message => Line > 0
+        ? $"{base.Message} (line {Line}{(File is null ? string.Empty : $" of {Path.GetFileName(File)}")})"
+        : base.Message;
+
+    internal void Place(string? file, Horizon.HIDL.Parsing.SourceSpan at)
+    {
+        (Line, Column, Length, File) = (at.Line, at.Column, at.Length, file);
+    }
+}

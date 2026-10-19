@@ -1,7 +1,7 @@
-﻿namespace Horizon.HIDL.Parsing;
+namespace Horizon.HIDL.Parsing;
 
-public readonly struct DeleteStatement(in string target) : IStatement
+public sealed class DeleteStatement(in string target) : IStatement
 {
-    public readonly NodeType Type { get; init; } = NodeType.DeleteStatement;
-    public readonly string Target { get; init; } = target;
+    public NodeType Type { get; init; } = NodeType.DeleteStatement;
+    public string Target { get; init; } = target;
 }

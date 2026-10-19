@@ -107,6 +107,16 @@ public static class HIDLWriter
         }
     }
 
+    /// <summary>A value written into text at a depth, so a writer of whole files (HIDLDocument) lays nested values out the same way.</summary>
+    public static void WriteInto(StringBuilder text, IRuntimeValue value, int depth) => Append(text, value, depth);
+
+    /// <summary>A key as an object writes it, a plain name as it is and anything else in quotes.</summary>
+    public static void WriteKey(StringBuilder text, string key)
+    {
+        if (IsIdentifier(key)) text.Append(key);
+        else AppendString(text, key);
+    }
+
     private static void AppendDeclaration(StringBuilder text, string name, IRuntimeValue value, bool isConst)
     {
         text.Append(isConst ? "const " : "let ").Append(name).Append(" = ");

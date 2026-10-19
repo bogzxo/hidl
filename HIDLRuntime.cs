@@ -20,7 +20,7 @@ namespace Horizon.HIDL;
 public class HIDLRuntime
 {
     public const string VERSION = "0.1.0";
-    public static readonly NullValue NULL = Values.Null;
+    public static readonly IRuntimeValue NULL = Values.Null;
 
     // The runtime whose program is running right now on this thread, for library functions that call back into
     // scripts (sort, map). Nested evaluations put the one before back when they are done
@@ -62,6 +62,33 @@ public class HIDLRuntime
     /// from disk unless the host has files somewhere else (a pack, a download).
     /// </summary>
     public Func<string, string?, string>? IncludeReader { get; set; }
+
+    /// <summary>
+    /// Where the values the programs it runs make were written, null (the usual) for not keeping track. An editor sets
+    /// it to a new map before it runs a file to show what the file comes to, see <see cref="HIDLSourceMap"/>.
+    /// </summary>
+    public HIDLSourceMap? Sources { get; set; }
+
+    /// <summary>
+    /// The file the program running right now was read out of, for the places in errors and the source map. Set by
+    /// <see cref="RunFile"/> and include, a host that runs text that came out of a file can say which.
+    /// </summary>
+    public string? SourceFile { get; set; }
+
+    /// <summary>
+    /// What is defined, by the host before a program runs (<see cref="Define"/>) and by the programs it runs with
+    /// #define, which stays after them for the host to ask about. A program asks with defined("name") and
+    /// definition("name"). See <see cref="Preprocessing.HIDLPreprocessor"/>.
+    /// </summary>
+    public Dictionary<string, string> Defines { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Defines a name for what is run from now on, with a value or without one.</summary>
+    public void Define(string name, string value = "") => Defines[name] = value;
+
+    public bool IsDefined(string name) => Defines.ContainsKey(name);
+
+    /// <summary>Helper method to take the directives out of a program, what it defines going into <see cref="Defines"/>.</summary>
+    private string Preprocess(string source) => Preprocessing.HIDLPreprocessor.Process(source, Defines);
 
     // Files that are being included right now, to catch a file that includes itself
     private readonly Stack<string> including = new();
@@ -120,7 +147,7 @@ public class HIDLRuntime
 
         try
         {
-            value = Run(Parse(input), scratch);
+            value = Run(Parse(Preprocess(input)), scratch);
             success = true;
         }
         catch
@@ -140,7 +167,7 @@ public class HIDLRuntime
     {
         try
         {
-            IRuntimeValue value = Run(Parse(input), useGlobalScope ? GlobalScope : UserScope);
+            IRuntimeValue value = Run(Parse(Preprocess(input)), useGlobalScope ? GlobalScope : UserScope);
             return (true, Values.Text(value));
         }
         catch (Exception e)
@@ -152,7 +179,7 @@ public class HIDLRuntime
     /// <summary>
     /// Runs a program and hands back its last value, throwing with what went wrong if it didn't work.
     /// </summary>
-    public IRuntimeValue Run(in string input) => Run(Parse(input), UserScope);
+    public IRuntimeValue Run(in string input) => Run(Parse(Preprocess(input)), UserScope);
 
     /// <summary>
     /// Runs a program from a file, with include looking next to it. Throws with the file and what went wrong.
@@ -162,11 +189,17 @@ public class HIDLRuntime
         if (!File.Exists(path))
             throw new FileNotFoundException($"There is no '{path}'.");
 
-        string? before = BaseDirectory;
+        string? before = BaseDirectory, fileBefore = SourceFile;
         BaseDirectory = Path.GetDirectoryName(Path.GetFullPath(path));
+        SourceFile = Path.GetFullPath(path);
         try
         {
-            return Run(Parse(File.ReadAllText(path)), UserScope);
+            return Run(Parse(Preprocess(File.ReadAllText(path))), UserScope);
+        }
+        catch (HidlRuntimeException e) when (e.Line > 0)
+        {
+            // It says where already, the file and all
+            throw;
         }
         catch (Exception e) when (e is not FileNotFoundException)
         {
@@ -175,6 +208,7 @@ public class HIDLRuntime
         finally
         {
             BaseDirectory = before;
+            SourceFile = fileBefore;
         }
     }
 
@@ -219,6 +253,57 @@ public class HIDLRuntime
     public static ProgramStatement Parse(in string input) => new Parser().ProduceSyntaxTree(Lexer.Tokenize(input));
 
     /// <summary>
+    /// Parses a program and goes on after every mistake, handing back the tree of what did parse and every mistake, for an
+    /// editor. A text that isn't lexed at all (a string never closed) is the one mistake.
+    /// </summary>
+    public static (ProgramStatement Program, IReadOnlyList<ParseException> Errors) ParseAll(string input)
+    {
+        var errors = new List<ParseException>();
+        try
+        {
+            string processed = Preprocessing.HIDLPreprocessor.Process(input, new Dictionary<string, string>(StringComparer.Ordinal));
+            return (new Parser().ProduceSyntaxTree(Lexer.Tokenize(processed), errors), errors);
+        }
+        catch (ParseException e)
+        {
+            errors.Add(e);
+            return (new ProgramStatement { Body = [] }, errors);
+        }
+    }
+
+    /// <summary>Parses a program after its directives have had their say, with nothing defined but what it defines itself.</summary>
+    public static ProgramStatement ParseWithDirectives(string input) =>
+        Parse(Preprocessing.HIDLPreprocessor.Process(input, new Dictionary<string, string>(StringComparer.Ordinal)));
+
+    // Programs that were included, by the file, with the text they were parsed from. Five characters including the shared
+    // moves parsed them five times. A program never changes once it is parsed, so one is shared by every runtime that
+    // includes the same text, on any thread
+    private const int MAX_INCLUDED = 128;
+    private static readonly Dictionary<string, (string Source, Parsing.ProgramStatement Program)> included = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Lock includedLock = new();
+
+    /// <summary>Helper method to parse an included file, or hand back the parse of the same text from before.</summary>
+    private static Parsing.ProgramStatement ParseIncluded(string full, string source)
+    {
+        lock (includedLock)
+        {
+            if (included.TryGetValue(full, out var known) && string.Equals(known.Source, source, StringComparison.Ordinal))
+                return known.Program;
+        }
+
+        Parsing.ProgramStatement program = Parse(source);
+
+        lock (includedLock)
+        {
+            if (included.Count >= MAX_INCLUDED)
+                included.Clear();
+            included[full] = (source, program);
+        }
+
+        return program;
+    }
+
+    /// <summary>
     /// What include("file.hor") does. The file is run in a scope of its own over the global one and everything it
     /// declared comes back as an object, so <c>include("shared.hor").moves</c> is the moves of that file.
     /// </summary>
@@ -236,13 +321,21 @@ public class HIDLRuntime
             : File.Exists(full) ? File.ReadAllText(full) : throw new HidlRuntimeException($"There is no '{path}' to include.");
 
         Environment scope = new(GlobalScope);
-        string? before = BaseDirectory;
+        string? before = BaseDirectory, fileBefore = SourceFile;
 
         including.Push(full);
         BaseDirectory = Path.GetDirectoryName(full);
+        SourceFile = full;
         try
         {
-            Interpreter.Evaluate(Parse(source), scope);
+            // What an included file defines is its own, what the host and the file that included it defined it sees
+            var defines = new Dictionary<string, string>(Defines, StringComparer.Ordinal);
+            Interpreter.Evaluate(ParseIncluded(full, Preprocessing.HIDLPreprocessor.Process(source, defines)), scope);
+        }
+        catch (HidlRuntimeException e) when (e.Line > 0)
+        {
+            // Where in the included file it went wrong, which says which file it is
+            throw;
         }
         catch (HidlRuntimeException e)
         {
@@ -255,6 +348,7 @@ public class HIDLRuntime
         finally
         {
             BaseDirectory = before;
+            SourceFile = fileBefore;
             including.Pop();
         }
 

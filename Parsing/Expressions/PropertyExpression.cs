@@ -4,11 +4,20 @@ namespace Horizon.HIDL.Parsing;
 /// One <c>key: value</c> of an object literal. Without a value it is the shorthand <c>{ key }</c>, which takes the
 /// variable of that name. A key of null with a <see cref="SpreadExpression"/> as the value is <c>...other</c>.
 /// </summary>
-public readonly struct PropertyExpression(in string? key, in IExpression? value) : IExpression
+public sealed class PropertyExpression(in string? key, in IExpression? value) : IExpression
 {
-    public readonly NodeType Type { get; init; } = NodeType.Property;
-    public readonly string? Key { get; init; } = key;
-    public readonly IExpression? Value { get; init; } = value;
+    public NodeType Type { get; init; } = NodeType.Property;
+    public string? Key { get; init; } = key;
+    public IExpression? Value { get; init; } = value;
+
+    /// <summary>Where it was written, see <see cref="SourceSpan"/>.</summary>
+    public SourceSpan Span { get; init; }
+
+    /// <summary>Where its value was written, all of it.</summary>
+    public SourceSpan ValueSpan { get; init; }
+
+    /// <summary>What a doc comment says about it, null for nothing, see <see cref="HIDLDocs"/>.</summary>
+    public string? Doc { get; init; }
 
     public override string ToString()
     {

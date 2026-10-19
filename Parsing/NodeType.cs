@@ -42,4 +42,5 @@ public enum NodeType
     CallExpression,
     StringLiteral,
     BooleanLiteral,
+    Template,
 }

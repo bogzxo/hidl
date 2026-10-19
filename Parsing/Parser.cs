@@ -1,6 +1,7 @@
 using System.Globalization;
 
 using Horizon.HIDL.Lexing;
+using Horizon.HIDL.Runtime;
 
 namespace Horizon.HIDL.Parsing;
 
@@ -16,11 +17,20 @@ namespace Horizon.HIDL.Parsing;
 /// </summary>
 public class Parser
 {
-    private Queue<Token> Tokens { get; set; } = new();
+    // The tokens without the comments and directives, and which one is next. It was a queue fed through a LINQ filter,
+    // and looking ahead walked the queue
+    private Token[] tokens = [];
+    private int position;
 
-    private Token Peek() => Tokens.Peek();
+    private Token Peek() => tokens[position];
 
-    private Token Consume() => Tokens.Dequeue();
+    private Token Consume()
+    {
+        Token token = tokens[position];
+        if (position < tokens.Length - 1)
+            position++;
+        return token;
+    }
 
     private Token Consume(TokenType expected, string? what = null)
     {
@@ -28,8 +38,16 @@ public class Parser
         if (token.Type != expected)
             throw Unexpected(token, what ?? Describe(expected));
 
-        return Tokens.Dequeue();
+        return Consume();
     }
+
+    /// <summary>
+    /// Whether a token is a word, a name or one of the language's own, which is what a key of an object or a member after
+    /// a dot may be. <c>{ for: 1 }</c>, <c>move.in</c> and <c>{ null: 0 }</c> are all fine.
+    /// </summary>
+    private static bool IsWord(in Token token) => token.Type is TokenType.Identifier or TokenType.Let or TokenType.Const or TokenType.Function
+        or TokenType.If or TokenType.Else or TokenType.While or TokenType.Do or TokenType.For or TokenType.In or TokenType.Return
+        or TokenType.Break or TokenType.Continue or TokenType.Delete or TokenType.Vector or TokenType.Boolean or TokenType.Null;
 
     private bool Next(TokenType type) => Peek().Type == type;
 
@@ -59,19 +77,101 @@ public class Parser
         _ => type.ToString()
     };
 
-    public ProgramStatement ProduceSyntaxTree(in Token[] inputTokens)
+    public ProgramStatement ProduceSyntaxTree(in Token[] inputTokens) => ProduceSyntaxTree(inputTokens, null);
+
+    // The most mistakes a parse that goes on after them collects, past that the file is something else entirely
+    private const int MOST_ERRORS = 50;
+
+    /// <summary>
+    /// Parses, and with somewhere to put them, goes on after a mistake instead of stopping at it. What was wrong is
+    /// collected and the parse picks up again at the next statement (after a ; or at a let, const or func outside of
+    /// any brackets), so an editor gets every mistake in a file and the tree of everything that did parse. Without, the
+    /// first mistake is thrown as it always was.
+    /// </summary>
+    public ProgramStatement ProduceSyntaxTree(Token[] inputTokens, List<ParseException>? errors)
     {
         // Comments are for people, the parser never sees them
-        Tokens = new Queue<Token>(inputTokens.Where(token => token.Type != TokenType.Comment));
+        int kept = 0;
+        foreach (Token token in inputTokens)
+        {
+            if (token.Type is not (TokenType.Comment or TokenType.Directive))
+                kept++;
+        }
+
+        tokens = new Token[Math.Max(1, kept)];
+        kept = 0;
+        foreach (Token token in inputTokens)
+        {
+            if (token.Type is not (TokenType.Comment or TokenType.Directive))
+                tokens[kept++] = token;
+        }
+
+        if (kept == 0 || tokens[kept - 1].Type != TokenType.EndOfFile)
+            tokens[^1] = new Token(TokenType.EndOfFile, string.Empty);
+
+        // Which lines have documentation, worked out only for a file that has any
+        docs = HIDLDocs.Lines.Of(inputTokens);
+
+        position = 0;
         List<IStatement> statements = [];
 
         while (!Next(TokenType.EndOfFile))
         {
-            if (ParseStatement() is { } statement)
-                statements.Add(statement);
+            if (errors is null)
+            {
+                if (ParseStatement() is { } statement)
+                    statements.Add(statement);
+                continue;
+            }
+
+            int from = position;
+            try
+            {
+                if (ParseStatement() is { } statement)
+                    statements.Add(statement);
+            }
+            catch (ParseException e)
+            {
+                errors.Add(e);
+                if (errors.Count >= MOST_ERRORS)
+                    break;
+
+                Recover(from);
+            }
         }
 
         return new ProgramStatement { Body = statements };
+    }
+
+    /// <summary>
+    /// Helper method to skip to where the next statement starts after a mistake, past a ; or up to a let, const or func
+    /// that isn't inside of any brackets. Always at least a token on from where the statement started, or it would go round.
+    /// </summary>
+    private void Recover(int from)
+    {
+        if (position <= from)
+            Consume();
+
+        int depth = 0;
+        while (!Next(TokenType.EndOfFile))
+        {
+            Token token = Peek();
+            if (depth == 0 && (token.Type is TokenType.Let or TokenType.Const || (token.Type == TokenType.Function && PeekAhead(1).Type == TokenType.Identifier)))
+                return;
+
+            Consume();
+            switch (token.Type)
+            {
+                case TokenType.OpenBracket or TokenType.OpenBrace or TokenType.OpenParenthesis:
+                    depth++;
+                    break;
+                case TokenType.CloseBracket or TokenType.CloseBrace or TokenType.CloseParenthesis:
+                    depth = Math.Max(0, depth - 1);
+                    break;
+                case TokenType.Semicolon when depth == 0:
+                    return;
+            }
+        }
     }
 
     /* Statements */
@@ -103,17 +203,16 @@ public class Parser
         return statement;
     }
 
-    private Token PeekAhead(int offset)
-    {
-        int i = 0;
-        foreach (Token token in Tokens)
-        {
-            if (i++ == offset)
-                return token;
-        }
+    private Token PeekAhead(int offset) => tokens[Math.Min(position + offset, tokens.Length - 1)];
 
-        return new Token(TokenType.EndOfFile, string.Empty);
-    }
+    // Where the documentation of the file is, null for a file without any
+    private HIDLDocs.Lines? docs;
+
+    /// <summary>What documents what is on a line, see HIDLDocs.</summary>
+    private string? DocFor(in Token token) => docs?.For(token.Line);
+
+    // The token that was taken last, where what was just parsed ends
+    private Token Last => tokens[Math.Max(0, position - 1)];
 
     private IStatement ParseKeywordStatement(TokenType keyword, IStatement statement)
     {
@@ -169,11 +268,13 @@ public class Parser
             if (isConst)
                 throw new ParseException($"The constant '{name.Value}' needs a value (line {name.Line}).", name.Line, name.Col);
 
-            return new VariableDeclarationExpression(name.Value, null, false);
+            return new VariableDeclarationExpression(name.Value, null, false) { Span = SourceSpan.Of(name), Doc = DocFor(name) };
         }
 
         Consume(TokenType.Equals);
-        return new VariableDeclarationExpression(name.Value, ParseExpression(), isConst);
+        Token first = Peek();
+        IExpression value = ParseExpression();
+        return new VariableDeclarationExpression(name.Value, value, isConst) { Span = SourceSpan.Of(name), ValueSpan = SourceSpan.Between(first, Last), Doc = DocFor(name) };
     }
 
     private IExpression ParseFunctionDeclaration()
@@ -182,9 +283,9 @@ public class Parser
 
         if (Next(TokenType.Identifier))
         {
-            string name = Consume().Value;
+            Token name = Consume();
             var (parameters, body) = ParseParametersAndBody();
-            return new FunctionDeclarationExpression(name, parameters, body);
+            return new FunctionDeclarationExpression(name.Value, parameters, body) { Span = SourceSpan.Of(name), Doc = DocFor(name) };
         }
 
         var (anonymousParameters, anonymousBody) = ParseParametersAndBody();
@@ -300,7 +401,7 @@ public class Parser
     // a ? b : c, with either side allowed to be another one
     private IExpression ParseConditional()
     {
-        IExpression condition = ParseOr();
+        IExpression condition = ParseNullish();
         if (!Next(TokenType.Question))
             return condition;
 
@@ -310,6 +411,19 @@ public class Parser
         IExpression otherwise = ParseAssignment();
 
         return new ConditionalExpression(condition, then, otherwise);
+    }
+
+    // a ?? b, a unless it is null, b if it is. Looser than || so a.b ?? c || d is a.b ?? (c || d)
+    private IExpression ParseNullish()
+    {
+        IExpression left = ParseOr();
+        while (NextOperator("??"))
+        {
+            Consume();
+            left = new BinaryExpression(left, ParseOr(), "??");
+        }
+
+        return left;
     }
 
     private IExpression ParseOr()
@@ -410,22 +524,32 @@ public class Parser
 
         while (true)
         {
-            if (Next(TokenType.Dot))
+            if (Next(TokenType.Dot) || Next(TokenType.QuestionDot))
             {
+                // a?.b is null when a is, a.b is an error then
+                bool optional = Consume().Type == TokenType.QuestionDot;
+                Token name = Peek();
+                if (!IsWord(name))
+                    throw Unexpected(name, "a name after the dot");
                 Consume();
-                Token name = Consume(TokenType.Identifier, "a name after the dot");
-                expression = new MemberExpression(expression, new IdentifierExpression(name.Value), false);
+
+                expression = new MemberExpression(expression, new IdentifierExpression(name.Value) { Span = SourceSpan.Of(name) }, false)
+                {
+                    Span = SourceSpan.Of(name),
+                    Optional = optional
+                };
             }
             else if (Next(TokenType.OpenBrace))
             {
-                Consume();
+                Token open = Consume();
                 IExpression index = ParseExpression();
                 Consume(TokenType.CloseBrace);
-                expression = new MemberExpression(expression, index, true);
+                expression = new MemberExpression(expression, index, true) { Span = SourceSpan.Of(open) };
             }
             else if (Next(TokenType.OpenParenthesis))
             {
-                expression = new CallExpression(ParseArguments(), expression);
+                SourceSpan at = SourceSpan.Of(Peek());
+                expression = new CallExpression(ParseArguments(), expression) { Span = at };
             }
             else
             {
@@ -460,16 +584,26 @@ public class Parser
         switch (token.Type)
         {
             case TokenType.Identifier:
-                return new IdentifierExpression(Consume().Value);
+            {
+                Token name = Consume();
+                return new IdentifierExpression(name.Value) { Span = SourceSpan.Of(name) };
+            }
 
+            // A literal makes its value here, once, and hands that one out every time it is evaluated
             case TokenType.Number:
                 Consume();
-                if (!float.TryParse(token.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float number))
-                    throw new ParseException($"'{token.Value}' isn't a number (line {token.Line}).", token.Line, token.Col, token.Value.Length);
-                return new NumericLiteralExpression(number);
+                return new NumericLiteralExpression(token.Number) { Constant = new NumberValue(token.Number) };
 
             case TokenType.TextLiteral:
-                return new StringLiteralExpression(Consume().Value);
+                Consume();
+                return new StringLiteralExpression(token.Value) { Constant = new StringValue(token.Value) };
+
+            case TokenType.Boolean:
+                Consume();
+                return new BooleanLiteralExpression(token.Value == "true");
+
+            case TokenType.Template:
+                return ParseTemplate(Consume());
 
             case TokenType.Function:
                 return ParseFunctionDeclaration();
@@ -541,19 +675,21 @@ public class Parser
             else
             {
                 Token key = Peek();
-                if (key.Type is not (TokenType.Identifier or TokenType.TextLiteral))
+                if (key.Type != TokenType.TextLiteral && !IsWord(key))
                     throw Unexpected(key, "the name of a property");
                 Consume();
 
                 if (Next(TokenType.Colon))
                 {
                     Consume();
-                    properties.Add(new PropertyExpression(key.Value, ParseExpression()));
+                    Token first = Peek();
+                    IExpression value = ParseExpression();
+                    properties.Add(new PropertyExpression(key.Value, value) { Span = SourceSpan.Of(key), ValueSpan = SourceSpan.Between(first, Last), Doc = DocFor(key) });
                 }
                 else
                 {
                     // { name } is { name: name }
-                    properties.Add(new PropertyExpression(key.Value, null));
+                    properties.Add(new PropertyExpression(key.Value, null) { Span = SourceSpan.Of(key), Doc = DocFor(key) });
                 }
             }
 
@@ -568,17 +704,87 @@ public class Parser
     }
 
     /// <summary>
+    /// Helper method to take a template apart, <c>`{name} has {health} left`</c>, into the texts between the braces and
+    /// the expressions in them. An expression is lexed where it is in the file, so an error in one says where. A brace
+    /// that is only a brace is written <c>\{</c>.
+    /// </summary>
+    private static IExpression ParseTemplate(Token template)
+    {
+        string raw = template.Value;
+        List<string> parts = [];
+        List<IExpression> holes = [];
+
+        // Where the text after the backtick starts, counted the way the lexer does
+        int line = template.Line, col = template.Col + 1;
+        int from = 0, i = 0;
+
+        void Over(int to)
+        {
+            for (; i < to; i++)
+            {
+                if (raw[i] == '\n') { line++; col = 1; }
+                else col++;
+            }
+        }
+
+        while (i < raw.Length)
+        {
+            if (raw[i] == '\\')
+            {
+                Over(Math.Min(raw.Length, i + 2));
+                continue;
+            }
+
+            if (raw[i] != '{')
+            {
+                Over(i + 1);
+                continue;
+            }
+
+            parts.Add(Lexer.Unescape(raw, from, i));
+            Over(i + 1);
+
+            int start = i, depth = 0, startLine = line, startCol = col;
+            while (i < raw.Length && (raw[i] != '}' || depth > 0))
+            {
+                if (raw[i] == '{') depth++;
+                else if (raw[i] == '}') depth--;
+                Over(i + 1);
+            }
+
+            if (i >= raw.Length)
+                throw new ParseException($"A {{ in the template at line {template.Line} is never closed.", template.Line, template.Col);
+
+            Token[] inside = Lexer.Tokenize(raw, lenient: false, start, i, startLine, startCol);
+            var parser = new Parser { tokens = inside, position = 0 };
+            holes.Add(parser.ParseExpression());
+            if (!parser.Next(TokenType.EndOfFile))
+                throw Unexpected(parser.Peek(), "'}' to end the expression in the template");
+
+            Over(i + 1);
+            from = i;
+        }
+
+        parts.Add(Lexer.Unescape(raw, from, raw.Length));
+        return new TemplateExpression([.. parts], [.. holes]) { Span = SourceSpan.Of(template) };
+    }
+
+    /// <summary>
     /// Helper method to read <c>[a, b, ...others, ]</c>.
     /// </summary>
     private IExpression ParseListLiteral()
     {
         Consume(TokenType.OpenBrace);
         List<IExpression> items = [];
+        List<SourceSpan> spans = [], values = [];
 
         while (!Next(TokenType.CloseBrace))
         {
             if (Next(TokenType.EndOfFile))
                 throw Unexpected(Peek(), "']' to close the list");
+
+            Token first = Peek();
+            spans.Add(SourceSpan.Of(first));
 
             if (Next(TokenType.Spread))
             {
@@ -590,6 +796,8 @@ public class Parser
                 items.Add(ParseExpression());
             }
 
+            values.Add(SourceSpan.Between(first, Last));
+
             if (Next(TokenType.Comma))
                 Consume();
             else if (!Next(TokenType.CloseBrace))
@@ -597,6 +805,6 @@ public class Parser
         }
 
         Consume(TokenType.CloseBrace);
-        return new ListLiteralExpression([.. items]);
+        return new ListLiteralExpression([.. items]) { ItemSpans = [.. spans], ItemValueSpans = [.. values] };
     }
 }
