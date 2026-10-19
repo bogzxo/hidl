@@ -1,0 +1,248 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "HIDL",
+    "scopeName": "source.hidl",
+    "fileTypes": ["hor", "jab", "hex-workspace"],
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#directive" },
+        { "include": "#strings" },
+        { "include": "#template" },
+        { "include": "#numbers" },
+        { "include": "#constants" },
+        { "include": "#function-declaration" },
+        { "include": "#variable-declaration" },
+        { "include": "#keywords" },
+        { "include": "#component-kind" },
+        { "include": "#builtins" },
+        { "include": "#calls" },
+        { "include": "#members" },
+        { "include": "#keys" },
+        { "include": "#identifiers" },
+        { "include": "#operators" },
+        { "include": "#brackets" },
+        { "include": "#punctuation" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.hidl",
+                    "begin": "//",
+                    "beginCaptures": { "0": { "name": "punctuation.definition.comment.hidl" } },
+                    "end": "$"
+                },
+                {
+                    "name": "comment.block.hidl",
+                    "begin": "/\\*",
+                    "beginCaptures": { "0": { "name": "punctuation.definition.comment.begin.hidl" } },
+                    "end": "\\*/",
+                    "endCaptures": { "0": { "name": "punctuation.definition.comment.end.hidl" } }
+                }
+            ]
+        },
+        "directive": {
+            "comment": "A # first on its line is for the preprocessor, the whole line of it. #define layout is the first thing every layout says",
+            "name": "meta.preprocessor.hidl",
+            "begin": "^\\s*((#)\\s*(define|undef|ifdef|ifndef|if|elif|else|endif|[A-Za-z_]*))",
+            "beginCaptures": {
+                "1": { "name": "keyword.control.directive.hidl" },
+                "2": { "name": "punctuation.definition.directive.hidl" }
+            },
+            "end": "$",
+            "patterns": [
+                { "include": "#comments" },
+                {
+                    "match": "\\b(defined)\\s*(\\()\\s*([A-Za-z_]\\w*)?\\s*(\\))",
+                    "captures": {
+                        "1": { "name": "support.function.builtin.hidl" },
+                        "2": { "name": "punctuation.section.parens.begin.hidl" },
+                        "3": { "name": "entity.name.constant.preprocessor.hidl" },
+                        "4": { "name": "punctuation.section.parens.end.hidl" }
+                    }
+                },
+                { "name": "keyword.operator.logical.hidl", "match": "&&|\\|\\||!" },
+                { "name": "keyword.operator.comparison.hidl", "match": "==|!=|<=|>=|<|>" },
+                { "include": "#strings" },
+                { "include": "#numbers" },
+                { "name": "entity.name.constant.preprocessor.hidl", "match": "\\b[A-Za-z_]\\w*\\b" }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "comment": "A text that is a key of a game's language, \"@main_menu.quit\", the quotes and all",
+                    "name": "string.other.link.reference.hidl",
+                    "begin": "\"(?=@)",
+                    "end": "\"|$",
+                    "patterns": [
+                        { "include": "#string-escape" }
+                    ]
+                },
+                {
+                    "comment": "A text ends with its line when it is never closed, the editor's lexer does the same while it is being typed",
+                    "name": "string.quoted.double.hidl",
+                    "begin": "\"",
+                    "end": "\"|$",
+                    "patterns": [
+                        { "include": "#string-escape" },
+                        { "include": "#string-markup" }
+                    ]
+                }
+            ]
+        },
+        "string-escape": {
+            "name": "constant.character.escape.hidl",
+            "match": "\\\\."
+        },
+        "string-markup": {
+            "comment": "What a label reads in a text, [b], [color:red], [icon:pad_a], [icons:playstation] and a Codicon as $(save)",
+            "patterns": [
+                { "name": "constant.other.placeholder.symbol.hidl", "match": "\\$\\([^\\s)\"]+\\)" },
+                { "name": "constant.other.placeholder.markup.hidl", "match": "\\[[^\\s\\]\"]+\\]" }
+            ]
+        },
+        "template": {
+            "comment": "A text in backticks with {expressions} in it",
+            "name": "string.interpolated.hidl",
+            "begin": "`",
+            "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.hidl" } },
+            "end": "`",
+            "endCaptures": { "0": { "name": "punctuation.definition.string.end.hidl" } },
+            "patterns": [
+                { "include": "#string-escape" },
+                {
+                    "name": "meta.embedded.expression.hidl",
+                    "begin": "\\{",
+                    "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.hidl" } },
+                    "end": "\\}",
+                    "endCaptures": { "0": { "name": "punctuation.section.embedded.end.hidl" } },
+                    "patterns": [
+                        { "include": "$self" }
+                    ]
+                }
+            ]
+        },
+        "numbers": {
+            "name": "constant.numeric.hidl",
+            "match": "(?<![\\w.])(\\d+(\\.\\d+)?|\\.\\d+)\\b"
+        },
+        "constants": {
+            "name": "constant.language.hidl",
+            "match": "\\b(true|false|null)\\b"
+        },
+        "keywords": {
+            "patterns": [
+                { "name": "storage.type.hidl", "match": "\\b(let|const|func)\\b" },
+                { "name": "keyword.control.hidl", "match": "\\b(if|else|while|do|for|in|return|break|continue|delete)\\b" }
+            ]
+        },
+        "variable-declaration": {
+            "match": "\\b(let|const)\\s+([A-Za-z_]\\w*)",
+            "captures": {
+                "1": { "name": "storage.type.hidl" },
+                "2": { "name": "entity.name.variable.hidl" }
+            }
+        },
+        "function-declaration": {
+            "comment": "func name(a, b), the name and its parameters, and a function without a name, func(a, b)",
+            "begin": "\\b(func)\\s+(?:([A-Za-z_]\\w*)\\s*)?(\\()",
+            "beginCaptures": {
+                "1": { "name": "storage.type.function.hidl" },
+                "2": { "name": "entity.name.function.hidl" },
+                "3": { "name": "punctuation.section.parameters.begin.hidl" }
+            },
+            "end": "\\)",
+            "endCaptures": { "0": { "name": "punctuation.section.parameters.end.hidl" } },
+            "patterns": [
+                { "include": "#comments" },
+                { "name": "variable.parameter.hidl", "match": "\\b[A-Za-z_]\\w*\\b" },
+                { "name": "punctuation.separator.parameter.hidl", "match": "," }
+            ]
+        },
+        "component-kind": {
+            "comment": "The kind of a component, the button of compositor.button",
+            "match": "(?<=\\bcompositor\\.)[A-Za-z_]\\w*",
+            "name": "entity.name.type.component.hidl"
+        },
+        "builtins": {
+            "comment": "What the language comes with before anybody writes a line, and the compositor a layout is made with",
+            "match": "(?<![.\\w])(print|include|len|keys|values|has|range|merge|typeof|to_text|text|number|format|math|defined|definition|error|version|reset|vec|compositor)\\b(?!\\s*:)",
+            "name": "support.function.builtin.hidl"
+        },
+        "calls": {
+            "patterns": [
+                {
+                    "match": "(?<=\\.)([A-Za-z_]\\w*)(?=\\s*\\()",
+                    "name": "entity.name.function.member.hidl"
+                },
+                {
+                    "match": "\\b([A-Za-z_]\\w*)(?=\\s*\\()",
+                    "name": "entity.name.function.hidl"
+                }
+            ]
+        },
+        "members": {
+            "match": "(?<=\\.)([A-Za-z_]\\w*)",
+            "name": "variable.other.member.hidl"
+        },
+        "keys": {
+            "match": "\\b([A-Za-z_]\\w*)(?=\\s*:)",
+            "name": "variable.other.property.hidl"
+        },
+        "identifiers": {
+            "match": "\\b[A-Za-z_]\\w*\\b",
+            "name": "variable.other.hidl"
+        },
+        "operators": {
+            "patterns": [
+                { "name": "keyword.operator.spread.hidl", "match": "\\.\\.\\." },
+                { "name": "keyword.operator.null-coalescing.hidl", "match": "\\?\\?" },
+                { "name": "keyword.operator.optional.hidl", "match": "\\?\\." },
+                { "name": "keyword.operator.comparison.hidl", "match": "==|!=|<=|>=|<|>" },
+                { "name": "keyword.operator.logical.hidl", "match": "&&|\\|\\||!" },
+                { "name": "keyword.operator.assignment.compound.hidl", "match": "[-+*/%]=" },
+                { "name": "keyword.operator.assignment.hidl", "match": "=" },
+                { "name": "keyword.operator.arithmetic.hidl", "match": "[-+*/%]" },
+                { "name": "keyword.operator.ternary.hidl", "match": "\\?" },
+                { "name": "keyword.operator.bitwise.hidl", "match": "[|&]" }
+            ]
+        },
+        "brackets": {
+            "patterns": [
+                {
+                    "begin": "\\{",
+                    "beginCaptures": { "0": { "name": "punctuation.section.block.begin.hidl" } },
+                    "end": "\\}",
+                    "endCaptures": { "0": { "name": "punctuation.section.block.end.hidl" } },
+                    "patterns": [ { "include": "$self" } ]
+                },
+                {
+                    "begin": "\\[",
+                    "beginCaptures": { "0": { "name": "punctuation.section.brackets.begin.hidl" } },
+                    "end": "\\]",
+                    "endCaptures": { "0": { "name": "punctuation.section.brackets.end.hidl" } },
+                    "patterns": [ { "include": "$self" } ]
+                },
+                {
+                    "begin": "\\(",
+                    "beginCaptures": { "0": { "name": "punctuation.section.parens.begin.hidl" } },
+                    "end": "\\)",
+                    "endCaptures": { "0": { "name": "punctuation.section.parens.end.hidl" } },
+                    "patterns": [ { "include": "$self" } ]
+                },
+                { "name": "punctuation.section.block.end.hidl", "match": "\\}" },
+                { "name": "punctuation.section.brackets.end.hidl", "match": "\\]" },
+                { "name": "punctuation.section.parens.end.hidl", "match": "\\)" }
+            ]
+        },
+        "punctuation": {
+            "patterns": [
+                { "name": "punctuation.separator.comma.hidl", "match": "," },
+                { "name": "punctuation.separator.key-value.hidl", "match": ":" },
+                { "name": "punctuation.terminator.statement.hidl", "match": ";" },
+                { "name": "punctuation.accessor.hidl", "match": "\\." }
+            ]
+        }
+    }
+}

@@ -116,6 +116,7 @@ public static class HIDLInterop
     {
         private readonly string folder = Path.GetDirectoryName(path)!;
 
+        [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Loading an assembly off the disk is what the interop is for, a published Hex has none of it to load and a script asking gets told there is no such type.")]
         protected override Assembly? Load(AssemblyName name)
         {
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())

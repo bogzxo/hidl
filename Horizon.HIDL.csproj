@@ -11,4 +11,9 @@
     <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The TextMate grammar of the language, one file for VS Code (editors/vscode) and for Hex, read through HIDLGrammar -->
+    <EmbeddedResource Include="editors\vscode\syntaxes\hidl.tmLanguage.json" LogicalName="hidl.tmLanguage.json" />
+  </ItemGroup>
+
 </Project>

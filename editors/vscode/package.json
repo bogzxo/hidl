@@ -1,0 +1,42 @@
+{
+    "name": "hidl",
+    "displayName": "HIDL",
+    "description": "Syntax highlighting for HIDL, the Horizon engine's scripting and layout language (.hor).",
+    "version": "0.1.0",
+    "publisher": "bogzxo",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/bogzxo/hidl"
+    },
+    "engines": {
+        "vscode": "^1.90.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "hidl",
+                "aliases": [
+                    "HIDL",
+                    "hidl"
+                ],
+                "extensions": [
+                    ".hor",
+                    ".jab",
+                    ".hex-workspace"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "hidl",
+                "scopeName": "source.hidl",
+                "path": "./syntaxes/hidl.tmLanguage.json"
+            }
+        ]
+    }
+}
