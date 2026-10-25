@@ -229,7 +229,7 @@ public static class Lexer
                 ('/', '=') => (TokenType.CompoundEquals, "/"),
                 ('%', '=') => (TokenType.CompoundEquals, "%"),
                 // ?.5 is a ? and a number, a?.b a member that may be null
-                ('?', '.') when !(index + 2 < end && char.IsDigit(src[index + 2])) => (TokenType.QuestionDot, "?."),
+                ('?', '.') when !(index + 2 < end && char.IsAsciiDigit(src[index + 2])) => (TokenType.QuestionDot, "?."),
                 _ => null
             };
 
@@ -248,7 +248,7 @@ public static class Lexer
                 ':' => (TokenType.Colon, ":"),
                 ',' => (TokenType.Comma, ","),
                 // .5 is a number, see below
-                '.' when !char.IsDigit(next) => (TokenType.Dot, "."),
+                '.' when !char.IsAsciiDigit(next) => (TokenType.Dot, "."),
                 '!' => (TokenType.Exclamation, "!"),
                 '?' => (TokenType.Question, "?"),
                 // The lexer has always called these the other way round, a { is an OpenBracket
@@ -276,11 +276,12 @@ public static class Lexer
                 continue;
             }
 
-            // Numbers, digits with one dot at most. 1.5 and .5 and 10
-            if (char.IsDigit(current) || (current == '.' && char.IsDigit(next)))
+            // Numbers, digits with one dot at most. 1.5 and .5 and 10. Only 0 to 9, the digits of other scripts are digits to
+            // char.IsDigit but not to float.Parse, and a png opened as text threw on one
+            if (char.IsAsciiDigit(current) || (current == '.' && char.IsAsciiDigit(next)))
             {
                 bool dotted = false;
-                while (index < end && (char.IsDigit(src[index]) || (src[index] == '.' && !dotted && index + 1 < end && char.IsDigit(src[index + 1]))))
+                while (index < end && (char.IsAsciiDigit(src[index]) || (src[index] == '.' && !dotted && index + 1 < end && char.IsAsciiDigit(src[index + 1]))))
                 {
                     if (src[index] == '.') dotted = true;
                     Step();
