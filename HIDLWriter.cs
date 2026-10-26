@@ -29,10 +29,17 @@ public static class HIDLWriter
     /// Writes a value as an expression, e.g. <c>vec(1, 2)</c> or an object literal over several lines.
     /// </summary>
     /// <exception cref="NotSupportedException">The value has no way of being written, see <see cref="CanWrite"/>.</exception>
-    public static string Write(IRuntimeValue value)
+    public static string Write(IRuntimeValue value) => Write(value, false);
+
+    /// <summary>
+    /// Writes a value as an expression, with a comma after the last item of every object and list that goes over
+    /// several lines when <paramref name="trailingCommas"/> says so. That's how a file a tool writes whole is written,
+    /// every line of an object the same, so adding or taking away the last key is a change of one line in a diff.
+    /// </summary>
+    public static string Write(IRuntimeValue value, bool trailingCommas)
     {
         StringBuilder text = new();
-        Append(text, value, 0);
+        Append(text, value, 0, trailingCommas);
         return text.ToString();
     }
 
@@ -108,7 +115,10 @@ public static class HIDLWriter
     }
 
     /// <summary>A value written into text at a depth, so a writer of whole files (HIDLDocument) lays nested values out the same way.</summary>
-    public static void WriteInto(StringBuilder text, IRuntimeValue value, int depth) => Append(text, value, depth);
+    public static void WriteInto(StringBuilder text, IRuntimeValue value, int depth) => Append(text, value, depth, false);
+
+    /// <summary>A value written into text at a depth, with a comma after the last item of what goes over several lines when <paramref name="trailingCommas"/> says so.</summary>
+    public static void WriteInto(StringBuilder text, IRuntimeValue value, int depth, bool trailingCommas) => Append(text, value, depth, trailingCommas);
 
     /// <summary>A key as an object writes it, a plain name as it is and anything else in quotes.</summary>
     public static void WriteKey(StringBuilder text, string key)
@@ -120,11 +130,11 @@ public static class HIDLWriter
     private static void AppendDeclaration(StringBuilder text, string name, IRuntimeValue value, bool isConst)
     {
         text.Append(isConst ? "const " : "let ").Append(name).Append(" = ");
-        Append(text, value, 0);
+        Append(text, value, 0, false);
         text.Append(';');
     }
 
-    private static void Append(StringBuilder text, IRuntimeValue value, int depth)
+    private static void Append(StringBuilder text, IRuntimeValue value, int depth, bool trailing)
     {
         switch (value)
         {
@@ -157,15 +167,15 @@ public static class HIDLWriter
                 break;
 
             case NativeValue native:
-                Append(text, native.AccessorCallback(), depth);
+                Append(text, native.AccessorCallback(), depth, trailing);
                 break;
 
             case ObjectValue obj:
-                AppendObject(text, obj, depth);
+                AppendObject(text, obj, depth, trailing);
                 break;
 
             case ListValue list:
-                AppendList(text, list, depth);
+                AppendList(text, list, depth, trailing);
                 break;
 
             default:
@@ -173,7 +183,7 @@ public static class HIDLWriter
         }
     }
 
-    private static void AppendObject(StringBuilder text, ObjectValue obj, int depth)
+    private static void AppendObject(StringBuilder text, ObjectValue obj, int depth, bool trailing)
     {
         if (depth >= MAX_DEPTH)
             throw new NotSupportedException("An object that contains itself can't be written as text.");
@@ -186,7 +196,7 @@ public static class HIDLWriter
                 if (!CanWriteProperty(value))
                     continue;
 
-                // Commas go between properties only, the parser takes one after the last as well but a file reads better without
+                // Commas go between properties, and after the last one too in a file a tool writes whole (see Write)
                 text.Append(any ? "," : "{").AppendLine();
                 AppendIndent(text, depth + 1);
 
@@ -195,7 +205,7 @@ public static class HIDLWriter
                 else AppendString(text, key);
 
                 text.Append(": ");
-                Append(text, value, depth + 1);
+                Append(text, value, depth + 1, trailing);
                 any = true;
             }
         }
@@ -206,12 +216,14 @@ public static class HIDLWriter
             return;
         }
 
+        if (trailing)
+            text.Append(',');
         text.AppendLine();
         AppendIndent(text, depth);
         text.Append('}');
     }
 
-    private static void AppendList(StringBuilder text, ListValue list, int depth)
+    private static void AppendList(StringBuilder text, ListValue list, int depth, bool trailing)
     {
         if (depth >= MAX_DEPTH)
             throw new NotSupportedException("A list that contains itself can't be written as text.");
@@ -230,7 +242,7 @@ public static class HIDLWriter
             for (int i = 0; i < list.Count; i++)
             {
                 if (i > 0) line.Append(", ");
-                Append(line, list[i], depth + 1);
+                Append(line, list[i], depth + 1, trailing);
             }
             line.Append(']');
 
@@ -249,9 +261,11 @@ public static class HIDLWriter
 
             text.Append(i > 0 ? "," : string.Empty).AppendLine();
             AppendIndent(text, depth + 1);
-            Append(text, list[i], depth + 1);
+            Append(text, list[i], depth + 1, trailing);
         }
 
+        if (trailing)
+            text.Append(',');
         text.AppendLine();
         AppendIndent(text, depth);
         text.Append(']');

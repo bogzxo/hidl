@@ -8,6 +8,8 @@ namespace Horizon.HIDL;
 /// A whole .hor file written out, the comments at its top, its defines, and its declarations, the objects in them with a
 /// comment over any key that has one. What every program that keeps a file of HIDL (settings, keys, sessions, a
 /// workspace) writes it with, rather than a StringBuilder of its own, so they all come out the same and all read back.
+/// What goes over several lines has a comma after its last item as well, so a key added at the end of an object is one
+/// new line in a diff and not two.
 /// <code>
 /// string text = new HIDLDocument()
 ///     .Comment("The terminal's settings.")
@@ -156,7 +158,7 @@ public sealed class HIDLObject
                 AppendItems(text, items, depth);
                 break;
             case IRuntimeValue plain:
-                HIDLWriter.WriteInto(text, plain, depth);
+                HIDLWriter.WriteInto(text, plain, depth, trailingCommas: true);
                 break;
         }
     }
@@ -181,7 +183,6 @@ public sealed class HIDLObject
         }
 
         text.Append("{\n");
-        int last = entries.FindLastIndex(entry => entry.Value is not NoteMark);
         for (int i = 0; i < entries.Count; i++)
         {
             var (key, value, comment) = entries[i];
@@ -192,7 +193,9 @@ public sealed class HIDLObject
             HIDLWriter.WriteKey(text, key);
             text.Append(": ");
             AppendValue(text, value, depth + 1);
-            text.Append(i < last ? ",\n" : "\n");
+
+            // A comma after every key, the last too, so a key added or taken away is a line of its own in a diff
+            text.Append(",\n");
         }
 
         Indent(text, depth);
@@ -212,7 +215,7 @@ public sealed class HIDLObject
         {
             Indent(text, depth + 1);
             items[i].Append(text, depth + 1);
-            text.Append(i < items.Count - 1 ? ",\n" : "\n");
+            text.Append(",\n");
         }
 
         Indent(text, depth);

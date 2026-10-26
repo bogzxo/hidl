@@ -27,6 +27,8 @@ public sealed class SpreadExpression(in IExpression source) : IExpression
 
 /// <summary>
 /// <c>for (name in list) { }</c>. Walks a list, the keys of an object, the characters of a string or 0 up to a number.
+/// With two names, <c>for (key, value in object)</c> or <c>for (index, item in list)</c>, the first is the key or the place
+/// and the second what is there.
 /// </summary>
 public sealed class ForInStatement(in string variable, in IExpression source, in IStatement[] body) : IStatement
 {
@@ -34,6 +36,9 @@ public sealed class ForInStatement(in string variable, in IExpression source, in
     public string Variable { get; init; } = variable;
     public IExpression Source { get; init; } = source;
     public IStatement[] Body { get; init; } = body;
+
+    /// <summary>The first of two names, the key or the place, null for a loop of one name.</summary>
+    public string? Key { get; init; }
 }
 
 /// <summary>

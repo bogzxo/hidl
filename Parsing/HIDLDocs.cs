@@ -111,6 +111,19 @@ public static class HIDLDocs
         for (int i = 0; i + 1 < tokens.Length; i++)
         {
             Token token = tokens[i], next = tokens[i + 1];
+
+            // let { a, b } = thing, every name of it documented by what is over the let
+            if (token.Type is TokenType.Let or TokenType.Const && next.Type is TokenType.OpenBracket or TokenType.OpenBrace)
+            {
+                foreach (Token declared in HIDLDeclarations.Declared(tokens, i))
+                {
+                    if (lines.For(token.Line) is { } over)
+                        found.Add(new HidlDoc(declared.Value, over, declared.Line, declared.Col));
+                }
+
+                continue;
+            }
+
             Token? named = token.Type switch
             {
                 TokenType.Let or TokenType.Const or TokenType.Function when next.Type == TokenType.Identifier => next,

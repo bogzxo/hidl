@@ -13,7 +13,9 @@ What the grammar knows. Line and block comments, the preprocessor's lines (`#def
 `#ifndef`, `#elif`, `#else`, `#endif`, `#undef`), texts with their escapes and the markup a label reads in them
 (`[b]`, `[color:red]`, `[icon:pad_a]`, `$(save)`), a text that is a key of a game's language (`"@main_menu.quit"`),
 templates in backticks with `{expressions}` inside, numbers, `true`, `false` and `null`, the keywords, the names made
-with `let`, `const` and `func` and a function's parameters, the kind after `compositor.`, what the language comes with
-(`print`, `include`, `vec` and the rest), calls, members after a dot, the keys of objects, the operators (`??` and
-`?.` among them) and the brackets. What a name is beyond that (made in this file, a parameter, the library's) Hex works
-out on top of the grammar with the language's own lexer, the way VS Code lays semantic tokens over TextMate.
+with `let`, `const` and `func` (and the ones `let { a, b }` takes out of something), the names a `for` goes through
+with (`for (key, value in object)` too), a function's parameters and an arrow's (`x =>`, `(a, b = 2) =>`), the kind
+after `compositor.`, what the language comes with (`print`, `include`,
+`vec` and the rest), calls, members after a dot, the keys of objects, the operators (`??`, `?.` and the `=>` of an
+arrow among them) and the brackets. What a name is beyond that (made in this file, a parameter, the library's) Hex
+works out on top of the grammar with the language's own lexer, the way VS Code lays semantic tokens over TextMate.

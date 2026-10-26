@@ -27,6 +27,32 @@ dummy behaviours, Release, October 2026. See also `hex/docs/performance.md` and 
 - **Scopes made lazily.** A scope's dictionaries are made when something is first declared in it.
 - **`merge(a, b, ...)`**, deep, later wins, nothing given changed. How a character's moves go over the shared ones.
 
+## What is done (the round after)
+
+Every code file of horizon, Hex and Fighter2D gone through for what it kept writing the long way (270 anonymous
+`func`s, 216 one line ifs, 45 `has` calls, a handful of helpers per extension), and each of them moved over to the
+short way after.
+
+- **The shorthands.** Arrows (`x => x * 2`), defaults for parameters, one statement without braces after an `if`,
+  `else`, loop or `do`, `in` as an operator, `for (key, value in object)`, keys in brackets (`{ [name]: value }`),
+  `delete thing.key`, `let { a, b } = thing` and `let [a, b] = list`, and `?.` before an index or a call.
+- **The library** has what the extensions kept writing for themselves, the `is_` checks, `trim_start` and `trim_end`,
+  `lines`, `chars`, `find`, `reduce`, `sum`, `unique`, `flat`, `format` with a text, `entries`.
+- **Errors for a misspelt name.** Calling or reaching into a name nobody declared says so, with the nearest name.
+- **Less garbage.** The lexer builds into a list kept on the thread (it was a list a quarter of the file long every
+  time) and reads whole numbers itself, the parser steps over comments instead of copying the tokens without them and
+  hands out one value per number, a method of a list or a text is called without making a function of it, and a scope
+  keeps its first few names in two little arrays. Lexing Hex's 79 KB of texts makes 285 KB where it made 918, a sprite
+  sheet parses in half the time, a call of a dummy behaviour makes a sixth less.
+- **The tools know it.** Hex's inlay hints read arrows a `let` holds and defaults, signature help writes a default as
+  it's written, `F12`, peek and the hover go to the parameter, loop name or `let` round where a name is used (and find
+  a `func` at all, they didn't before), and the engine's highlighter and the TextMate grammar colour the names of a
+  `for` and leave what a default uses alone. `HIDLDeclarations` has what they share, the parameters of a bracket and
+  the names of a loop, worked out from the tokens.
+- **What's written whole diffs by the line.** `HIDLDocument` (settings, keys, sessions, tasks) and the layout designer
+  put a comma after the last of everything that goes over lines, and the designer indents a list over lines under its
+  key. A value written into a file somebody wrote by hand (the move editor's edits, the table) is written as before.
+
 ## The lexer
 
 What it does now. A `StringBuilder` for every comment, text, number and name, `ToString` on every one-character operator,
