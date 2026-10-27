@@ -107,6 +107,15 @@ public static class Lexer
         void Add(TokenType type, string value, int at, int startLine, int startCol, float number = 0.0f) =>
             tokens.Add(new Token(type, value, startLine, startCol, at, index - at) { Number = number });
 
+        // How many characters from a place to the end of its line, for a mistake about all of what's left of it (a string
+        // never closed is underlined to the end of its line, it was its quote)
+        int ToLineEnd(int from)
+        {
+            int stop = from;
+            while (stop < end && src[stop] is not ('\n' or '\r')) stop++;
+            return Math.Max(1, stop - from);
+        }
+
         // One character on, keeping count of lines
         void Step()
         {
@@ -190,7 +199,7 @@ public static class Lexer
                 if (index >= end || src[index] != '"')
                 {
                     if (!lenient)
-                        throw new ParseException($"The string starting at line {startLine}, column {startCol} is never closed.", startLine, startCol);
+                        throw new ParseException($"The string starting at line {startLine}, column {startCol} is never closed.", startLine, startCol, ToLineEnd(at));
 
                     // Halfway through typing it. What there is of it is a text as far as the colours go
                     Add(TokenType.TextLiteral, text, at, startLine, startCol);
@@ -218,7 +227,7 @@ public static class Lexer
                 if (index >= end)
                 {
                     if (!lenient)
-                        throw new ParseException($"The template starting at line {startLine}, column {startCol} is never closed.", startLine, startCol);
+                        throw new ParseException($"The template starting at line {startLine}, column {startCol} is never closed.", startLine, startCol, ToLineEnd(at));
 
                     Add(TokenType.Template, src[from..index], at, startLine, startCol);
                     continue;
