@@ -9,27 +9,50 @@ namespace Horizon.HIDL.Parsing;
 /// Turns the tokens of a HIDL program into a syntax tree. Anything wrong with the program throws a
 /// <see cref="ParseException"/> that says what was expected and where.
 /// <para>
-/// The language has let and const, functions (named and anonymous) with return, if / else if / else, while,
-/// do while, for (x in something), break and continue, objects and lists (with spreads of other ones and trailing
-/// commas), vec(x, y[, z[, w]]), the usual arithmetic and comparisons, &amp;&amp; and ||, and compound assignment.
-/// Semicolons are optional. Comments go anywhere.
+/// The language has let and const (and let { a, b } = thing), functions (named, anonymous and arrows) with return and
+/// defaults for their parameters, if / else if / else, while, do while, for (x in something) and for (key, value in
+/// something), break and continue, objects and lists (with spreads of other ones, keys worked out in brackets and trailing
+/// commas), vec(x, y[, z[, w]]), the usual arithmetic and comparisons, in, &amp;&amp; and ||, and compound assignment.
+/// What an if, an else or a loop runs is a block or one statement. Semicolons are optional. Comments go anywhere.
 /// </para>
 /// </summary>
 public class Parser
 {
-    // The tokens without the comments and directives, and which one is next. It was a queue fed through a LINQ filter,
-    // and looking ahead walked the queue
+    // The tokens, which one is next and which was taken last. The comments and directives are stepped over as it goes,
+    // the parser never sees them. It was a queue fed through a LINQ filter, then a copy of the tokens without them, which
+    // was most of what parsing Hex's texts made
     private Token[] tokens = [];
     private int position;
+    private int last;
 
     private Token Peek() => tokens[position];
 
     private Token Consume()
     {
         Token token = tokens[position];
-        if (position < tokens.Length - 1)
-            position++;
+        last = position;
+        position = Over(position + 1);
         return token;
+    }
+
+    /// <summary>Helper method for the first token from a place on that isn't a comment or a directive, the last one at the most.</summary>
+    private int Over(int at)
+    {
+        int end = tokens.Length - 1;
+        if (at > end)
+            return end;
+
+        while (at < end && tokens[at].Type is TokenType.Comment or TokenType.Directive)
+            at++;
+        return at;
+    }
+
+    /// <summary>Helper method to start reading some tokens from the first of them.</summary>
+    private void Start(Token[] from)
+    {
+        tokens = from;
+        position = Over(0);
+        last = 0;
     }
 
     private Token Consume(TokenType expected, string? what = null)
@@ -90,29 +113,14 @@ public class Parser
     /// </summary>
     public ProgramStatement ProduceSyntaxTree(Token[] inputTokens, List<ParseException>? errors)
     {
-        // Comments are for people, the parser never sees them
-        int kept = 0;
-        foreach (Token token in inputTokens)
-        {
-            if (token.Type is not (TokenType.Comment or TokenType.Directive))
-                kept++;
-        }
-
-        tokens = new Token[Math.Max(1, kept)];
-        kept = 0;
-        foreach (Token token in inputTokens)
-        {
-            if (token.Type is not (TokenType.Comment or TokenType.Directive))
-                tokens[kept++] = token;
-        }
-
-        if (kept == 0 || tokens[kept - 1].Type != TokenType.EndOfFile)
-            tokens[^1] = new Token(TokenType.EndOfFile, string.Empty);
+        // The lexer always ends with the end of the file, tokens from anywhere else are given one
+        Start(inputTokens.Length > 0 && inputTokens[^1].Type == TokenType.EndOfFile
+            ? inputTokens
+            : [.. inputTokens, new Token(TokenType.EndOfFile, string.Empty)]);
 
         // Which lines have documentation, worked out only for a file that has any
         docs = HIDLDocs.Lines.Of(inputTokens);
 
-        position = 0;
         List<IStatement> statements = [];
 
         while (!Next(TokenType.EndOfFile))
@@ -192,6 +200,12 @@ public class Parser
             TokenType.Break => ParseKeywordStatement(TokenType.Break, new BreakStatement()),
             TokenType.Continue => ParseKeywordStatement(TokenType.Continue, new ContinueStatement()),
             TokenType.For => ParseForStatement(),
+
+            // An if or a loop on its own is a statement, a line after it that starts with a bracket or a minus isn't
+            // taken to be called on it, indexed into or taken away from it. As a value (let a = if ...) it still is one
+            TokenType.If => ParseIf(),
+            TokenType.While => ParseWhile(),
+            TokenType.Do => ParseDoWhile(),
             TokenType.Function when PeekAhead(1).Type == TokenType.Identifier => ParseFunctionDeclaration(),
             _ => ParseExpression(),
         };
@@ -203,7 +217,13 @@ public class Parser
         return statement;
     }
 
-    private Token PeekAhead(int offset) => tokens[Math.Min(position + offset, tokens.Length - 1)];
+    private Token PeekAhead(int offset)
+    {
+        int at = position;
+        for (int i = 0; i < offset; i++)
+            at = Over(at + 1);
+        return tokens[at];
+    }
 
     // Where the documentation of the file is, null for a file without any
     private HIDLDocs.Lines? docs;
@@ -212,7 +232,7 @@ public class Parser
     private string? DocFor(in Token token) => docs?.For(token.Line);
 
     // The token that was taken last, where what was just parsed ends
-    private Token Last => tokens[Math.Max(0, position - 1)];
+    private Token Last => tokens[last];
 
     private IStatement ParseKeywordStatement(TokenType keyword, IStatement statement)
     {
@@ -222,9 +242,19 @@ public class Parser
 
     private IStatement ParseDeleteStatement()
     {
-        Consume(TokenType.Delete);
-        string identifier = Consume(TokenType.Identifier, "the name of the variable to delete").Value;
-        return new DeleteStatement(identifier);
+        Token keyword = Consume(TokenType.Delete);
+
+        // delete name takes a variable away, delete thing.key or thing[key] a key of an object or an item of a list
+        if (Next(TokenType.Identifier) && PeekAhead(1).Type is not (TokenType.Dot or TokenType.OpenBrace or TokenType.QuestionDot))
+            return new DeleteStatement(Consume().Value);
+
+        if (!Next(TokenType.Identifier))
+            throw Unexpected(Peek(), "the name of the variable, or the key, to delete");
+
+        if (ParseCallMember() is not MemberExpression member)
+            throw new ParseException($"delete takes a variable, a key of an object or an item of a list (line {keyword.Line}).", keyword.Line, keyword.Col, 6);
+
+        return new DeleteStatement(string.Empty) { Member = member };
     }
 
     private IStatement ParseReturnStatement()
@@ -232,7 +262,7 @@ public class Parser
         Consume(TokenType.Return);
 
         // A bare return hands back null. The value, if there is one, is on the same line as far as the grammar cares
-        if (Next(TokenType.Semicolon) || Next(TokenType.CloseBracket) || Next(TokenType.EndOfFile))
+        if (Next(TokenType.Semicolon) || Next(TokenType.CloseBracket) || Next(TokenType.EndOfFile) || Next(TokenType.Else))
             return new ReturnStatement(null);
 
         return new ReturnStatement(ParseExpression());
@@ -248,16 +278,31 @@ public class Parser
             Consume();
 
         string variable = Consume(TokenType.Identifier, "the name of the loop variable").Value;
+
+        // for (key, value in object), for (index, item in list)
+        string? key = null;
+        if (Next(TokenType.Comma))
+        {
+            Consume();
+            key = variable;
+            variable = Consume(TokenType.Identifier, "the name of the second loop variable").Value;
+        }
+
         Consume(TokenType.In);
         IExpression source = ParseExpression();
         Consume(TokenType.CloseParenthesis);
 
-        return new ForInStatement(variable, source, ParseBlock());
+        return new ForInStatement(variable, source, ParseBody()) { Key = key };
     }
 
     private IStatement ParseVariableDeclaration()
     {
         bool isConst = Consume().Type == TokenType.Const;
+
+        // let { a, b } = thing; and let [a, b] = list;
+        if (Next(TokenType.OpenBracket) || Next(TokenType.OpenBrace))
+            return ParseDestructuring(isConst, DocFor(Last));
+
         Token name = Consume(TokenType.Identifier, "the name of the variable");
 
         if (Lexer.IsKeyword(name.Value))
@@ -277,6 +322,40 @@ public class Parser
         return new VariableDeclarationExpression(name.Value, value, isConst) { Span = SourceSpan.Of(name), ValueSpan = SourceSpan.Between(first, Last), Doc = DocFor(name) };
     }
 
+    /// <summary>
+    /// Helper method to read <c>let { a, b } = thing</c> or <c>let [a, b] = list</c>, the let or const taken already.
+    /// Names only, a trailing comma is fine.
+    /// </summary>
+    private IExpression ParseDestructuring(bool isConst, string? doc)
+    {
+        bool list = Consume().Type == TokenType.OpenBrace;
+        TokenType close = list ? TokenType.CloseBrace : TokenType.CloseBracket;
+        List<string> names = [];
+        List<SourceSpan> spans = [];
+
+        while (!Next(close))
+        {
+            Token name = Consume(TokenType.Identifier, list ? "the name of an item" : "the name of a key");
+            if (Lexer.IsKeyword(name.Value))
+                throw new ParseException($"'{name.Value}' is a word of the language, a variable can't be called that (line {name.Line}).", name.Line, name.Col);
+
+            names.Add(name.Value);
+            spans.Add(SourceSpan.Of(name));
+
+            if (Next(TokenType.Comma))
+                Consume();
+            else if (!Next(close))
+                throw Unexpected(Peek(), list ? "',' or ']' between the names" : "',' or '}' between the names");
+        }
+
+        Token closing = Consume(close);
+        if (names.Count == 0)
+            throw new ParseException($"There are no names to declare in there (line {closing.Line}).", closing.Line, closing.Col);
+
+        Consume(TokenType.Equals, "'=' and what to take the names out of");
+        return new DestructuringDeclaration([.. names], [.. spans], ParseExpression(), list, isConst) { Doc = doc };
+    }
+
     private IExpression ParseFunctionDeclaration()
     {
         Consume(TokenType.Function);
@@ -284,22 +363,37 @@ public class Parser
         if (Next(TokenType.Identifier))
         {
             Token name = Consume();
-            var (parameters, body) = ParseParametersAndBody();
-            return new FunctionDeclarationExpression(name.Value, parameters, body) { Span = SourceSpan.Of(name), Doc = DocFor(name) };
+            var (parameters, defaults) = ParseParameters();
+            return new FunctionDeclarationExpression(name.Value, parameters, ParseBlock()) { Span = SourceSpan.Of(name), Doc = DocFor(name), Defaults = defaults };
         }
 
-        var (anonymousParameters, anonymousBody) = ParseParametersAndBody();
-        return new AnonymousFunctionDeclarationExpression(anonymousParameters, anonymousBody);
+        var (anonymousParameters, anonymousDefaults) = ParseParameters();
+        return new AnonymousFunctionDeclarationExpression(anonymousParameters, ParseBlock()) { Defaults = anonymousDefaults };
     }
 
-    private (string[] Parameters, IStatement[] Body) ParseParametersAndBody()
+    /// <summary>
+    /// Helper method to read <c>(a, b = 2, c)</c>, the names and what each is when it isn't handed over (null for every
+    /// one of them when none has a default).
+    /// </summary>
+    private (string[] Parameters, IExpression?[]? Defaults) ParseParameters()
     {
         Consume(TokenType.OpenParenthesis);
         List<string> parameters = [];
+        List<IExpression?>? defaults = null;
 
         while (!Next(TokenType.CloseParenthesis))
         {
             parameters.Add(Consume(TokenType.Identifier, "the name of a parameter").Value);
+
+            if (Next(TokenType.Equals))
+            {
+                Consume();
+                defaults ??= [];
+                while (defaults.Count < parameters.Count - 1)
+                    defaults.Add(null);
+                defaults.Add(ParseConditional());
+            }
+
             if (Next(TokenType.Comma))
                 Consume();
             else
@@ -307,7 +401,60 @@ public class Parser
         }
 
         Consume(TokenType.CloseParenthesis);
-        return ([.. parameters], ParseBlock());
+
+        if (defaults is not null)
+        {
+            while (defaults.Count < parameters.Count)
+                defaults.Add(null);
+        }
+
+        return ([.. parameters], defaults is null ? null : [.. defaults]);
+    }
+
+    /// <summary>
+    /// Whether the brackets that open here are the parameters of an arrow, <c>(a, b) =&gt;</c>, which is the token after
+    /// the one that closes them.
+    /// </summary>
+    private bool ArrowAhead()
+    {
+        int depth = 0;
+        for (int at = position; at < tokens.Length; at++)
+        {
+            switch (tokens[at].Type)
+            {
+                case TokenType.OpenParenthesis:
+                    depth++;
+                    break;
+                case TokenType.CloseParenthesis:
+                    if (--depth == 0)
+                        return tokens[Over(at + 1)].Type == TokenType.Arrow;
+                    break;
+                case TokenType.EndOfFile or TokenType.Semicolon or TokenType.OpenBracket:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Helper method to read an arrow, <c>x =&gt; x * 2</c>, <c>(a, b) =&gt; a + b</c> or <c>() =&gt; { ... }</c>. An expression
+    /// after the arrow is what the function hands back, a block is a body like any function's.
+    /// </summary>
+    private IExpression ParseArrow()
+    {
+        string[] parameters;
+        IExpression?[]? defaults = null;
+
+        if (Next(TokenType.Identifier))
+            parameters = [Consume().Value];
+        else
+            (parameters, defaults) = ParseParameters();
+
+        Consume(TokenType.Arrow, "'=>'");
+
+        IStatement[] body = Next(TokenType.OpenBracket) ? ParseBlock() : [new ReturnStatement(ParseAssignment())];
+        return new AnonymousFunctionDeclarationExpression(parameters, body) { Defaults = defaults, Arrow = true };
     }
 
     /// <summary>
@@ -331,6 +478,21 @@ public class Parser
         return [.. body];
     }
 
+    /// <summary>
+    /// Helper method to read what an if, an else, a loop or a do runs, a block in braces or one statement without them,
+    /// <c>if (done) return;</c>.
+    /// </summary>
+    private IStatement[] ParseBody()
+    {
+        if (Next(TokenType.OpenBracket))
+            return ParseBlock();
+
+        if (Next(TokenType.EndOfFile) || Next(TokenType.Semicolon) || Next(TokenType.CloseBracket))
+            throw Unexpected(Peek(), "'{' or a statement");
+
+        return ParseStatement() is { } statement ? [statement] : [];
+    }
+
     private IExpression ParseIf()
     {
         Consume(TokenType.If);
@@ -338,7 +500,7 @@ public class Parser
         IExpression condition = ParseExpression();
         Consume(TokenType.CloseParenthesis);
 
-        IStatement[] body = ParseBlock();
+        IStatement[] body = ParseBody();
         IStatement[]? otherwise = null;
 
         if (Next(TokenType.Else))
@@ -346,7 +508,7 @@ public class Parser
             Consume();
 
             // else if is an if inside of the else
-            otherwise = Next(TokenType.If) ? [ParseIf()] : ParseBlock();
+            otherwise = Next(TokenType.If) ? [ParseIf()] : ParseBody();
         }
 
         return new IfDeclarationExpression(condition, body, otherwise);
@@ -359,13 +521,13 @@ public class Parser
         IExpression condition = ParseExpression();
         Consume(TokenType.CloseParenthesis);
 
-        return new WhileDeclarationExpression(condition, ParseBlock());
+        return new WhileDeclarationExpression(condition, ParseBody());
     }
 
     private IExpression ParseDoWhile()
     {
         Consume(TokenType.Do);
-        IStatement[] body = ParseBlock();
+        IStatement[] body = ParseBody();
 
         Consume(TokenType.While);
         Consume(TokenType.OpenParenthesis);
@@ -462,10 +624,11 @@ public class Parser
         return left;
     }
 
+    // a < b and the rest, and a in b, whether b has a (a key of an object, an item of a list, a piece of a text)
     private IExpression ParseComparison()
     {
         IExpression left = ParseAdditive();
-        while (NextOperator("<", ">", "<=", ">="))
+        while (NextOperator("<", ">", "<=", ">=") || Next(TokenType.In))
         {
             string op = Consume().Value;
             left = new BinaryExpression(left, ParseAdditive(), op);
@@ -528,6 +691,24 @@ public class Parser
             {
                 // a?.b is null when a is, a.b is an error then
                 bool optional = Consume().Type == TokenType.QuestionDot;
+
+                // a?.[key] and f?.(x), the same for an index and a call
+                if (optional && Next(TokenType.OpenBrace))
+                {
+                    Token open = Consume();
+                    IExpression key = ParseExpression();
+                    Consume(TokenType.CloseBrace);
+                    expression = new MemberExpression(expression, key, true) { Span = SourceSpan.Of(open), Optional = true };
+                    continue;
+                }
+
+                if (optional && Next(TokenType.OpenParenthesis))
+                {
+                    SourceSpan call = SourceSpan.Of(Peek());
+                    expression = new CallExpression(ParseArguments(), expression) { Span = call, Optional = true };
+                    continue;
+                }
+
                 Token name = Peek();
                 if (!IsWord(name))
                     throw Unexpected(name, "a name after the dot");
@@ -583,16 +764,21 @@ public class Parser
 
         switch (token.Type)
         {
+            // x => x * 2
+            case TokenType.Identifier when PeekAhead(1).Type == TokenType.Arrow:
+                return ParseArrow();
+
             case TokenType.Identifier:
             {
                 Token name = Consume();
                 return new IdentifierExpression(name.Value) { Span = SourceSpan.Of(name) };
             }
 
-            // A literal makes its value here, once, and hands that one out every time it is evaluated
+            // A literal makes its value here, once, and hands that one out every time it is evaluated. The same number
+            // written again is the same value, a sprite sheet writes 1.0 a thousand times
             case TokenType.Number:
                 Consume();
-                return new NumericLiteralExpression(token.Number) { Constant = new NumberValue(token.Number) };
+                return new NumericLiteralExpression(token.Number) { Constant = NumberConstant(token.Number) };
 
             case TokenType.TextLiteral:
                 Consume();
@@ -626,6 +812,10 @@ public class Parser
             case TokenType.OpenBrace:
                 return ParseListLiteral();
 
+            // (a, b) => a + b
+            case TokenType.OpenParenthesis when ArrowAhead():
+                return ParseArrow();
+
             case TokenType.OpenParenthesis:
             {
                 Consume();
@@ -641,6 +831,30 @@ public class Parser
             default:
                 throw Unexpected(token, "a value");
         }
+    }
+
+    // The numbers the parse has made a value of, by what they are, and the small whole ones made once for every parse
+    private Dictionary<float, IRuntimeValue>? numbers;
+    private static readonly IRuntimeValue[] SmallNumbers = MakeSmallNumbers();
+
+    private static IRuntimeValue[] MakeSmallNumbers()
+    {
+        var made = new IRuntimeValue[256];
+        for (int i = 0; i < made.Length; i++)
+            made[i] = new NumberValue(i);
+        return made;
+    }
+
+    /// <summary>Helper method to hand out one value for every number, values never change so they can be shared.</summary>
+    private IRuntimeValue NumberConstant(float number)
+    {
+        if (number >= 0.0f && number < SmallNumbers.Length && number == MathF.Floor(number) && !float.IsNegative(number))
+            return SmallNumbers[(int)number];
+
+        numbers ??= [];
+        if (!numbers.TryGetValue(number, out IRuntimeValue? value))
+            numbers[number] = value = new NumberValue(number);
+        return value;
     }
 
     private IExpression ParseVector()
@@ -671,6 +885,17 @@ public class Parser
             {
                 Consume();
                 properties.Add(new PropertyExpression(null, new SpreadExpression(ParseExpression())));
+            }
+            else if (Next(TokenType.OpenBrace))
+            {
+                // [name]: value, the key worked out as the object is made
+                Token open = Consume();
+                IExpression key = ParseExpression();
+                Token close = Consume(TokenType.CloseBrace, "']' after the key");
+                Consume(TokenType.Colon, "':' after the key");
+                Token first = Peek();
+                IExpression value = ParseExpression();
+                properties.Add(new PropertyExpression(null, value) { ComputedKey = key, Span = SourceSpan.Between(open, close), ValueSpan = SourceSpan.Between(first, Last), Doc = DocFor(open) });
             }
             else
             {
@@ -756,7 +981,8 @@ public class Parser
                 throw new ParseException($"A {{ in the template at line {template.Line} is never closed.", template.Line, template.Col);
 
             Token[] inside = Lexer.Tokenize(raw, lenient: false, start, i, startLine, startCol);
-            var parser = new Parser { tokens = inside, position = 0 };
+            var parser = new Parser();
+            parser.Start(inside);
             holes.Add(parser.ParseExpression());
             if (!parser.Next(TokenType.EndOfFile))
                 throw Unexpected(parser.Peek(), "'}' to end the expression in the template");

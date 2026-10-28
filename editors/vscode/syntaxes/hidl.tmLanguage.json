@@ -11,6 +11,7 @@
         { "include": "#numbers" },
         { "include": "#constants" },
         { "include": "#function-declaration" },
+        { "include": "#arrow-parameters" },
         { "include": "#variable-declaration" },
         { "include": "#keywords" },
         { "include": "#component-kind" },
@@ -133,16 +134,78 @@
         },
         "keywords": {
             "patterns": [
+                {
+                    "comment": "for (item in list), for (let item in list) and for (key, value in object), the names are declared",
+                    "match": "\\b(for)\\s*(\\()\\s*(?:(let|const)\\s+)?([A-Za-z_]\\w*)(?:\\s*(,)\\s*([A-Za-z_]\\w*))?\\s+(in)\\b",
+                    "captures": {
+                        "1": { "name": "keyword.control.hidl" },
+                        "2": { "name": "punctuation.section.parens.begin.hidl" },
+                        "3": { "name": "storage.type.hidl" },
+                        "4": { "name": "entity.name.variable.hidl" },
+                        "5": { "name": "punctuation.separator.comma.hidl" },
+                        "6": { "name": "entity.name.variable.hidl" },
+                        "7": { "name": "keyword.control.hidl" }
+                    }
+                },
                 { "name": "storage.type.hidl", "match": "\\b(let|const|func)\\b" },
                 { "name": "keyword.control.hidl", "match": "\\b(if|else|while|do|for|in|return|break|continue|delete)\\b" }
             ]
         },
         "variable-declaration": {
-            "match": "\\b(let|const)\\s+([A-Za-z_]\\w*)",
-            "captures": {
-                "1": { "name": "storage.type.hidl" },
-                "2": { "name": "entity.name.variable.hidl" }
-            }
+            "patterns": [
+                {
+                    "match": "\\b(let|const)\\s+([A-Za-z_]\\w*)",
+                    "captures": {
+                        "1": { "name": "storage.type.hidl" },
+                        "2": { "name": "entity.name.variable.hidl" }
+                    }
+                },
+                {
+                    "comment": "let { a, b } = thing and let [a, b] = list, every name in the brackets is declared",
+                    "begin": "\\b(let|const)\\s*([{\\[])",
+                    "beginCaptures": {
+                        "1": { "name": "storage.type.hidl" },
+                        "2": { "name": "punctuation.section.block.begin.hidl" }
+                    },
+                    "end": "[}\\]]",
+                    "endCaptures": { "0": { "name": "punctuation.section.block.end.hidl" } },
+                    "patterns": [
+                        { "include": "#comments" },
+                        { "name": "entity.name.variable.hidl", "match": "\\b[A-Za-z_]\\w*\\b" },
+                        { "name": "punctuation.separator.comma.hidl", "match": "," }
+                    ]
+                }
+            ]
+        },
+        "arrow-parameters": {
+            "comment": "The parameters of an arrow, x => and (a, b = 2) =>, the arrow itself is an operator",
+            "patterns": [
+                {
+                    "match": "\\b([A-Za-z_]\\w*)\\s*(=>)",
+                    "captures": {
+                        "1": { "name": "variable.parameter.hidl" },
+                        "2": { "name": "storage.type.function.arrow.hidl" }
+                    }
+                },
+                {
+                    "begin": "\\((?=[^()]*\\)\\s*=>)",
+                    "beginCaptures": { "0": { "name": "punctuation.section.parameters.begin.hidl" } },
+                    "end": "(\\))\\s*(=>)",
+                    "endCaptures": {
+                        "1": { "name": "punctuation.section.parameters.end.hidl" },
+                        "2": { "name": "storage.type.function.arrow.hidl" }
+                    },
+                    "patterns": [
+                        { "include": "#comments" },
+                        { "include": "#strings" },
+                        { "include": "#numbers" },
+                        { "include": "#constants" },
+                        { "name": "variable.parameter.hidl", "match": "\\b[A-Za-z_]\\w*\\b" },
+                        { "name": "keyword.operator.assignment.hidl", "match": "=" },
+                        { "name": "punctuation.separator.parameter.hidl", "match": "," }
+                    ]
+                }
+            ]
         },
         "function-declaration": {
             "comment": "func name(a, b), the name and its parameters, and a function without a name, func(a, b)",
@@ -156,7 +219,11 @@
             "endCaptures": { "0": { "name": "punctuation.section.parameters.end.hidl" } },
             "patterns": [
                 { "include": "#comments" },
+                { "include": "#strings" },
+                { "include": "#numbers" },
+                { "include": "#constants" },
                 { "name": "variable.parameter.hidl", "match": "\\b[A-Za-z_]\\w*\\b" },
+                { "name": "keyword.operator.assignment.hidl", "match": "=" },
                 { "name": "punctuation.separator.parameter.hidl", "match": "," }
             ]
         },
@@ -167,7 +234,7 @@
         },
         "builtins": {
             "comment": "What the language comes with before anybody writes a line, and the compositor a layout is made with",
-            "match": "(?<![.\\w])(print|include|len|keys|values|has|range|merge|typeof|to_text|text|number|format|math|defined|definition|error|version|reset|vec|compositor)\\b(?!\\s*:)",
+            "match": "(?<![.\\w])(print|include|len|keys|values|entries|has|range|merge|typeof|to_text|text|number|format|math|defined|definition|error|version|reset|vec|compositor)\\b(?!\\s*:)",
             "name": "support.function.builtin.hidl"
         },
         "calls": {
@@ -197,6 +264,7 @@
         "operators": {
             "patterns": [
                 { "name": "keyword.operator.spread.hidl", "match": "\\.\\.\\." },
+                { "name": "storage.type.function.arrow.hidl", "match": "=>" },
                 { "name": "keyword.operator.null-coalescing.hidl", "match": "\\?\\?" },
                 { "name": "keyword.operator.optional.hidl", "match": "\\?\\." },
                 { "name": "keyword.operator.comparison.hidl", "match": "==|!=|<=|>=|<|>" },

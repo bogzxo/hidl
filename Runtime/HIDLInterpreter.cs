@@ -95,6 +95,7 @@ public class HIDLInterpreter
             NodeType.Assignment => EvaluateAssignment((AssignmentExpression)statement, env),
             NodeType.CallExpression => EvaluateCall((CallExpression)statement, env),
             NodeType.VariableDeclaration => EvaluateVariableDeclaration((VariableDeclarationExpression)statement, env),
+            NodeType.Destructuring => EvaluateDestructuring((DestructuringDeclaration)statement, env),
             NodeType.FunctionDeclaration => EvaluateFunctionDeclaration((FunctionDeclarationExpression)statement, env),
             NodeType.AnonymousFunctionDeclaration => EvaluateAnonymousFunction((AnonymousFunctionDeclarationExpression)statement, env),
             NodeType.MemberExpression => EvaluateMember((MemberExpression)statement, env),
@@ -197,6 +198,16 @@ public class HIDLInterpreter
 
         foreach (PropertyExpression property in statement.Properties)
         {
+            // [name]: value, the key whatever name comes to as a text
+            if (property.ComputedKey is { } computed)
+            {
+                IRuntimeValue key = Evaluate(computed, env);
+                string text = key is StringValue said ? said.Value : Values.Text(key);
+                properties[text] = Evaluate(property.Value!, env);
+                Sources?.Key(properties, text, At(property.Span, property.ValueSpan, property.Value, property.Doc));
+                continue;
+            }
+
             // ...other puts everything of the other object in, later properties win over it
             if (property.Key is null)
             {
@@ -260,9 +271,42 @@ public class HIDLInterpreter
         return declared;
     }
 
+    /// <summary>
+    /// Helper method for let { a, b } = thing and let [a, b] = list, a variable for each name. A key that isn't there or an
+    /// item past the end is null, a vector hands out its numbers like a list.
+    /// </summary>
+    private IRuntimeValue EvaluateDestructuring(DestructuringDeclaration statement, Environment env)
+    {
+        IRuntimeValue value = Evaluate(statement.Value, env);
+        Span<float> components = stackalloc float[4];
+        int count = 0;
+
+        if (statement.List && value is not ListValue && !Values.TryGetComponents(value, components, out count))
+            throw new HidlRuntimeException($"Only a list or a vector can be taken apart with [ ], not {Values.TypeName(value)}.");
+        if (!statement.List && value is not (ObjectValue or IHostValue))
+            throw new HidlRuntimeException($"Only an object can be taken apart with {{ }}, not {Values.TypeName(value)}.");
+
+        for (int i = 0; i < statement.Names.Length; i++)
+        {
+            string name = statement.Names[i];
+            IRuntimeValue item = value switch
+            {
+                ListValue list => i < list.Count ? list[i] : Values.Null,
+                ObjectValue obj => obj.Properties.TryGetValue(name, out IRuntimeValue? held) ? held is NativeValue native ? native.AccessorCallback() : held : Values.Null,
+                IHostValue host => host.Get(name) ?? Values.Null,
+                _ => i < count ? new NumberValue(components[i]) : Values.Null
+            };
+
+            env.Declare(name, item, statement.ReadOnly);
+            Sources?.Declaration(name, At(statement.Spans[i]) with { Doc = statement.Doc });
+        }
+
+        return value;
+    }
+
     private IRuntimeValue EvaluateFunctionDeclaration(FunctionDeclarationExpression statement, Environment env)
     {
-        var function = new FunctionValue(statement.Name, statement.Parameters, env, statement.Body);
+        var function = new FunctionValue(statement.Name, statement.Parameters, env, statement.Body) { Defaults = statement.Defaults };
         Sources?.Declaration(statement.Name, At(statement.Span) with { Doc = statement.Doc });
 
         // Declaring a function again replaces it, which is how a file can fix up another one
@@ -270,13 +314,41 @@ public class HIDLInterpreter
     }
 
     private IRuntimeValue EvaluateAnonymousFunction(AnonymousFunctionDeclarationExpression statement, Environment env) =>
-        new AnonymousFunctionValue(statement.Parameters, env, statement.Body);
+        new AnonymousFunctionValue(statement.Parameters, env, statement.Body) { Defaults = statement.Defaults };
 
     private IRuntimeValue EvaluateDelete(DeleteStatement statement, Environment env)
     {
+        if (statement.Member is { } member)
+            return DeleteMember(member, env);
+
         Environment owner = env.Resolve(statement.Target) ?? throw new HidlRuntimeException($"There is no '{statement.Target}' to delete.");
         owner.Delete(statement.Target);
         return Values.Null;
+    }
+
+    /// <summary>Helper method for delete thing.key and delete list[i], hands back what was taken out, null for nothing.</summary>
+    private IRuntimeValue DeleteMember(MemberExpression member, Environment env)
+    {
+        IRuntimeValue target = Evaluate(member.Object, env);
+        switch (target)
+        {
+            case ObjectValue obj:
+                return obj.Properties.Remove(KeyOf(member, env), out IRuntimeValue? removed) ? removed : Values.Null;
+
+            case ListValue list:
+            {
+                int index = IndexOf(member, env, list.Count);
+                IRuntimeValue item = list[index];
+                list.Items.RemoveAt(index);
+                return item;
+            }
+
+            case NullValue when member.Optional:
+                return Values.Null;
+
+            default:
+                throw new HidlRuntimeException($"Nothing can be deleted out of {Values.TypeName(target)}, only a key of an object or an item of a list.");
+        }
     }
 
     private IRuntimeValue EvaluateAssignment(AssignmentExpression statement, Environment env)
@@ -402,10 +474,11 @@ public class HIDLInterpreter
 
     /* Members and calls */
 
-    private IRuntimeValue EvaluateMember(MemberExpression expression, Environment env)
-    {
-        IRuntimeValue target = Evaluate(expression.Object, env);
+    private IRuntimeValue EvaluateMember(MemberExpression expression, Environment env) => MemberOf(Evaluate(expression.Object, env), expression, env);
 
+    /// <summary>Helper method for a member of a value that has been worked out already, a.b, a[b] and a?.b.</summary>
+    private IRuntimeValue MemberOf(IRuntimeValue target, MemberExpression expression, Environment env)
+    {
         switch (target)
         {
             case ObjectValue obj:
@@ -450,6 +523,10 @@ public class HIDLInterpreter
 
             case NullValue when expression.Optional:
                 return Values.Null;
+
+            // A name nobody declared is null, which is usually a name spelt wrong, so it says so
+            case NullValue when expression.Object is IdentifierExpression named && !env.Has(named.Symbol):
+                throw new HidlRuntimeException($"There is no '{named.Symbol}' to get '{KeyOf(expression, env)}' from, nothing of that name was declared.{NearestName(named.Symbol, env)}");
 
             case NullValue:
                 throw new HidlRuntimeException($"There is nothing to get '{KeyOf(expression, env)}' from, the value is null. a?.b is null when a is.");
@@ -497,16 +574,56 @@ public class HIDLInterpreter
 
     private IRuntimeValue EvaluateCall(CallExpression statement, Environment env)
     {
-        var arguments = new IRuntimeValue[statement.Arguments.Length];
+        var arguments = statement.Arguments.Length == 0 ? [] : new IRuntimeValue[statement.Arguments.Length];
         for (int i = 0; i < arguments.Length; i++)
             arguments[i] = Evaluate(statement.Arguments[i], env);
 
-        IRuntimeValue function = Evaluate(statement.Caller, env);
+        IRuntimeValue function;
+        if (statement.Caller is MemberExpression { Computed: false } member)
+        {
+            // list.push(x) and text.trim() are called as they are, nothing is made to call them with. Anything else is
+            // the member it is, worked out from the value that is there already
+            IRuntimeValue target = Evaluate(member.Object, env);
+            string name = ((IdentifierExpression)member.Property).Symbol;
+
+            if (target is ListValue list && ListLibrary.TryCall(list, name, arguments, env, out IRuntimeValue listed))
+                return listed;
+            if (target is StringValue text && TextLibrary.TryCall(text.Value, name, arguments, env, out IRuntimeValue said))
+                return said;
+
+            try
+            {
+                function = MemberOf(target, member, env);
+            }
+            catch (HidlRuntimeException e) when (e.Line == 0 && member.Span.IsKnown)
+            {
+                e.Place(HIDLRuntime.Current?.SourceFile, member.Span);
+                throw;
+            }
+        }
+        else
+        {
+            function = Evaluate(statement.Caller, env);
+        }
+
         if (!Values.IsFunction(function))
+        {
+            // f?.(x) is null when f is
+            if (statement.Optional && function is NullValue)
+                return Values.Null;
+
+            // A function nobody declared is a name spelt wrong nine times in ten
+            if (function is NullValue && statement.Caller is IdentifierExpression named && !env.Has(named.Symbol))
+                throw new HidlRuntimeException($"There is no '{named.Symbol}' to call, nothing of that name was declared.{NearestName(named.Symbol, env)}");
+
             throw new HidlRuntimeException($"{Describe(statement.Caller)} isn't a function, it is {Values.TypeName(function)}.");
+        }
 
         return Call(function, arguments, env);
     }
+
+    /// <summary>Helper method for " Did you mean x?" with the nearest name that can be seen from a scope, for the errors.</summary>
+    private static string NearestName(string name, Environment env) => Suggest.Nearest(name, env.GetAllDeclaredValues(true).Keys);
 
     private static string Describe(IExpression expression) => expression switch
     {
@@ -528,26 +645,34 @@ public class HIDLInterpreter
                 return native.Callback(args, env);
 
             case FunctionValue function:
-                return Run(function.Parameters, function.Environment, function.Body, args);
+                return Run(function.Parameters, function.Environment, function.Body, args, function.Defaults);
 
             case AnonymousFunctionValue anonymous:
-                return Run(anonymous.Parameters, anonymous.Environment, anonymous.Body, args);
+                return Run(anonymous.Parameters, anonymous.Environment, anonymous.Body, args, anonymous.Defaults);
 
             default:
                 throw new HidlRuntimeException($"That isn't a function, it is {Values.TypeName(func)}.");
         }
     }
 
-    private IRuntimeValue Run(string[] parameters, Environment closure, IStatement[] body, IRuntimeValue[] args)
+    private IRuntimeValue Run(string[] parameters, Environment closure, IStatement[] body, IRuntimeValue[] args, IExpression?[]? defaults)
     {
         if (depth >= MAX_CALL_DEPTH)
             throw new HidlRuntimeException($"Calls went {MAX_CALL_DEPTH} deep, a function that calls itself and never stops?");
 
         Stopped();
 
+        // A parameter that isn't handed over (or is handed null) is its default, worked out in the function's own scope
+        // so it can go by the parameters before it
         Environment scope = new(closure);
         for (int i = 0; i < parameters.Length; i++)
-            scope.Declare(parameters[i], i < args.Length ? args[i] : Values.Null);
+        {
+            IRuntimeValue value = i < args.Length ? args[i] : Values.Null;
+            if (value is NullValue && defaults?[i] is { } fallback)
+                value = Evaluate(fallback, scope);
+
+            scope.Declare(parameters[i], value);
+        }
 
         // Whatever was on its way out of the caller waits, this function has flow of its own
         Flow outerFlow = flow;
@@ -637,6 +762,22 @@ public class HIDLInterpreter
         IRuntimeValue source = Evaluate(statement.Source, env);
         IRuntimeValue result = Values.Null;
 
+        // for (key, value in object) and for (index, item in list)
+        if (statement.Key is { } keyName)
+        {
+            foreach (var (key, value) in ListLibrary.WalkPairs(source))
+            {
+                Environment pair = new(env);
+                pair.Declare(keyName, key);
+                pair.Declare(statement.Variable, value);
+
+                result = EvaluateBlock(statement.Body, pair);
+                if (LeaveLoop()) break;
+            }
+
+            return result;
+        }
+
         // Every turn gets a scope of its own, so a function made in the loop keeps the value of its turn
         foreach (IRuntimeValue item in ListLibrary.Walk(source))
         {
@@ -696,6 +837,13 @@ public class HIDLInterpreter
         {
             IRuntimeValue left = Evaluate(expression.Left, env);
             return left is NullValue ? Evaluate(expression.Right!, env) : left;
+        }
+
+        // a in b, whether b has a
+        if (expression.Operator == "in")
+        {
+            IRuntimeValue item = Evaluate(expression.Left, env);
+            return Values.Bool(CoreLibrary.Contains(Evaluate(expression.Right!, env), item));
         }
 
         if (expression.Operator == "&&")

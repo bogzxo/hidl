@@ -65,4 +65,7 @@ public enum TokenType : byte
 
     // A text in backticks with {expressions} in it, the value is what is between the backticks as it was written
     Template,
+
+    // => between the parameters of an arrow function and what it does, x => x * 2
+    Arrow,
 }

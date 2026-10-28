@@ -43,4 +43,5 @@ public enum NodeType
     StringLiteral,
     BooleanLiteral,
     Template,
+    Destructuring,
 }

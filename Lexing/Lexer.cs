@@ -71,7 +71,31 @@ public static class Lexer
     /// </summary>
     internal static Token[] Tokenize(string src, bool lenient, int start, int end, int line, int col)
     {
-        var tokens = new List<Token>(Math.Max(16, (end - start) / 4));
+        // Built into a list kept on the thread and handed out as an array of exactly the tokens there are. It was a list
+        // as long as a quarter of the file every time, 640 KB for Hex's texts, and then a copy of it
+        List<Token> tokens = building ?? new List<Token>(256);
+        building = null;
+        tokens.Clear();
+
+        try
+        {
+            return TokenizeInto(tokens, src, lenient, start, end, line, col);
+        }
+        finally
+        {
+            if (tokens.Capacity <= MAX_KEPT_TOKENS)
+                building = tokens;
+        }
+    }
+
+    // The list tokens are built in, kept for the next file unless a huge one made it huge
+    private const int MAX_KEPT_TOKENS = 1 << 16;
+
+    [ThreadStatic]
+    private static List<Token>? building;
+
+    private static Token[] TokenizeInto(List<Token> tokens, string src, bool lenient, int start, int end, int line, int col)
+    {
         var names = pool ??= new HashSet<string>(StringComparer.Ordinal);
         if (names.Count > MAX_POOLED)
             names.Clear();
@@ -82,6 +106,15 @@ public static class Lexer
 
         void Add(TokenType type, string value, int at, int startLine, int startCol, float number = 0.0f) =>
             tokens.Add(new Token(type, value, startLine, startCol, at, index - at) { Number = number });
+
+        // How many characters from a place to the end of its line, for a mistake about all of what's left of it (a string
+        // never closed is underlined to the end of its line, it was its quote)
+        int ToLineEnd(int from)
+        {
+            int stop = from;
+            while (stop < end && src[stop] is not ('\n' or '\r')) stop++;
+            return Math.Max(1, stop - from);
+        }
 
         // One character on, keeping count of lines
         void Step()
@@ -145,7 +178,7 @@ public static class Lexer
                 continue;
             }
 
-            // Texts, with the usual escapes, \" \\ \n \t \r \0
+            // Texts, with the usual escapes, \" \\ \n \t \r \0 and \u001b
             if (current == '"')
             {
                 Step();
@@ -166,7 +199,7 @@ public static class Lexer
                 if (index >= end || src[index] != '"')
                 {
                     if (!lenient)
-                        throw new ParseException($"The string starting at line {startLine}, column {startCol} is never closed.", startLine, startCol);
+                        throw new ParseException($"The string starting at line {startLine}, column {startCol} is never closed.", startLine, startCol, ToLineEnd(at));
 
                     // Halfway through typing it. What there is of it is a text as far as the colours go
                     Add(TokenType.TextLiteral, text, at, startLine, startCol);
@@ -194,7 +227,7 @@ public static class Lexer
                 if (index >= end)
                 {
                     if (!lenient)
-                        throw new ParseException($"The template starting at line {startLine}, column {startCol} is never closed.", startLine, startCol);
+                        throw new ParseException($"The template starting at line {startLine}, column {startCol} is never closed.", startLine, startCol, ToLineEnd(at));
 
                     Add(TokenType.Template, src[from..index], at, startLine, startCol);
                     continue;
@@ -217,6 +250,7 @@ public static class Lexer
             (TokenType Type, string Value)? pair = (current, next) switch
             {
                 ('=', '=') => (TokenType.Equality, "=="),
+                ('=', '>') => (TokenType.Arrow, "=>"),
                 ('!', '=') => (TokenType.NotEquality, "!="),
                 ('>', '=') => (TokenType.BinaryOperation, ">="),
                 ('<', '=') => (TokenType.BinaryOperation, "<="),
@@ -229,7 +263,7 @@ public static class Lexer
                 ('/', '=') => (TokenType.CompoundEquals, "/"),
                 ('%', '=') => (TokenType.CompoundEquals, "%"),
                 // ?.5 is a ? and a number, a?.b a member that may be null
-                ('?', '.') when !(index + 2 < end && char.IsDigit(src[index + 2])) => (TokenType.QuestionDot, "?."),
+                ('?', '.') when !(index + 2 < end && char.IsAsciiDigit(src[index + 2])) => (TokenType.QuestionDot, "?."),
                 _ => null
             };
 
@@ -248,7 +282,7 @@ public static class Lexer
                 ':' => (TokenType.Colon, ":"),
                 ',' => (TokenType.Comma, ","),
                 // .5 is a number, see below
-                '.' when !char.IsDigit(next) => (TokenType.Dot, "."),
+                '.' when !char.IsAsciiDigit(next) => (TokenType.Dot, "."),
                 '!' => (TokenType.Exclamation, "!"),
                 '?' => (TokenType.Question, "?"),
                 // The lexer has always called these the other way round, a { is an OpenBracket
@@ -276,18 +310,19 @@ public static class Lexer
                 continue;
             }
 
-            // Numbers, digits with one dot at most. 1.5 and .5 and 10
-            if (char.IsDigit(current) || (current == '.' && char.IsDigit(next)))
+            // Numbers, digits with one dot at most. 1.5 and .5 and 10. Only 0 to 9, the digits of other scripts are digits to
+            // char.IsDigit but not to float.Parse, and a png opened as text threw on one
+            if (char.IsAsciiDigit(current) || (current == '.' && char.IsAsciiDigit(next)))
             {
                 bool dotted = false;
-                while (index < end && (char.IsDigit(src[index]) || (src[index] == '.' && !dotted && index + 1 < end && char.IsDigit(src[index + 1]))))
+                while (index < end && (char.IsAsciiDigit(src[index]) || (src[index] == '.' && !dotted && index + 1 < end && char.IsAsciiDigit(src[index + 1]))))
                 {
                     if (src[index] == '.') dotted = true;
                     Step();
                 }
 
                 ReadOnlySpan<char> digits = src.AsSpan(at, index - at);
-                float number = float.Parse(digits, NumberStyles.Float, CultureInfo.InvariantCulture);
+                float number = !dotted && digits.Length <= 7 ? Whole(digits) : float.Parse(digits, NumberStyles.Float, CultureInfo.InvariantCulture);
                 Add(TokenType.Number, Pooled(lookup, digits), at, startLine, startCol, number);
                 continue;
             }
@@ -318,6 +353,18 @@ public static class Lexer
         return [.. tokens];
     }
 
+    /// <summary>
+    /// Helper method to read a whole number of a few digits, most of the numbers in a file (a sprite sheet is nothing but
+    /// them), without float.Parse. Seven digits at most, every one of those is exactly a float.
+    /// </summary>
+    private static float Whole(ReadOnlySpan<char> digits)
+    {
+        int value = 0;
+        foreach (char digit in digits)
+            value = value * 10 + (digit - '0');
+        return value;
+    }
+
     /// <summary>Helper method to hand out the string of a name made before rather than make it again.</summary>
     private static string Pooled(HashSet<string>.AlternateLookup<ReadOnlySpan<char>> lookup, ReadOnlySpan<char> word)
     {
@@ -342,6 +389,14 @@ public static class Lexer
             char c = src[i];
             if (c == '\\' && i + 1 < to)
             {
+                // \u001b, a character by its number in four hex digits. Without the four digits a \u is a u, as it was
+                if (src[i + 1] == 'u' && i + 5 < to && ushort.TryParse(src.AsSpan(i + 2, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out ushort code))
+                {
+                    text.Append((char)code);
+                    i += 5;
+                    continue;
+                }
+
                 char after = src[++i];
                 text.Append(after switch
                 {

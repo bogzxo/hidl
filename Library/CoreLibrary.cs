@@ -31,6 +31,16 @@ public static class CoreLibrary
             _ => throw args.Wrong($"a {Values.TypeName(args[0])} has nothing to look in.")
         }), true);
 
+        // entries(object) is a list of [key, value], one a key, for handing the pairs on somewhere
+        scope.Declare("entries", Natives.Function("entries", args =>
+        {
+            var list = new ListValue();
+            foreach (var (key, value) in args.Object(0).Properties)
+                list.Items.Add(new ListValue([new StringValue(key), value is NativeValue native ? native.AccessorCallback() : value]));
+
+            return list;
+        }), true);
+
         // range(n) is 0 up to n, range(a, b) is a up to b, range(a, b, step) in steps
         scope.Declare("range", Natives.Function("range", args =>
         {
@@ -82,6 +92,27 @@ public static class CoreLibrary
         scope.Declare("defined", Natives.Function("defined", args => new BooleanValue(runtime.IsDefined(args.Text(0)))), true);
         scope.Declare("definition", Natives.Function("definition", args =>
             runtime.Defines.TryGetValue(args.Text(0), out string? value) ? new StringValue(value) : (IRuntimeValue)new NullValue()), true);
+    }
+
+    /// <summary>
+    /// What <c>item in container</c> says. A key of an object (a number is the key it is written as), an item of a list,
+    /// a piece of a text, a member of a thing of the host's that isn't null. Nothing is in null.
+    /// </summary>
+    public static bool Contains(IRuntimeValue container, IRuntimeValue item)
+    {
+        if (container is NativeValue native) container = native.AccessorCallback();
+        if (item is NativeValue nativeItem) item = nativeItem.AccessorCallback();
+
+        return container switch
+        {
+            ObjectValue obj => obj.Properties.ContainsKey(item is StringValue key ? key.Value : Values.Text(item)),
+            ListValue list => list.Items.Exists(other => Values.AreEqual(other, item)),
+            StringValue text when item is StringValue piece => text.Value.Contains(piece.Value, StringComparison.Ordinal),
+            StringValue => throw new HidlRuntimeException($"Only a text can be in a text, not {Values.TypeName(item)}."),
+            IHostValue host => host.Get(item is StringValue member ? member.Value : Values.Text(item)) is not (null or NullValue),
+            NullValue => false,
+            _ => throw new HidlRuntimeException($"Nothing is in {Values.TypeName(container)}, 'in' looks in an object, a list or a text.")
+        };
     }
 
     /// <summary>One value over another, objects key by key and the rest replaced, see merge above.</summary>
