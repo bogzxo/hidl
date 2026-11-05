@@ -64,6 +64,16 @@ public class HIDLRuntime
     public Func<string, string?, string>? IncludeReader { get; set; }
 
     /// <summary>
+    /// Turns the path of a file that is run or included into the one name it goes by, which is what include remembers
+    /// it as and the folder of what it includes in turn. The full path on disk unless the host's files are somewhere
+    /// else, a pack whose paths stay relative to it say. Goes with <see cref="IncludeReader"/>.
+    /// </summary>
+    public Func<string, string> FilePathResolver { get; set; } = Path.GetFullPath;
+
+    /// <summary>How <see cref="RunFile"/> reads the file it's given, off the disk unless the host says otherwise.</summary>
+    public Func<string, string>? FileReader { get; set; }
+
+    /// <summary>
     /// Where the values the programs it runs make were written, null (the usual) for not keeping track. An editor sets
     /// it to a new map before it runs a file to show what the file comes to, see <see cref="HIDLSourceMap"/>.
     /// </summary>
@@ -186,15 +196,17 @@ public class HIDLRuntime
     /// </summary>
     public IRuntimeValue RunFile(string path)
     {
-        if (!File.Exists(path))
+        if (FileReader is null && !File.Exists(path))
             throw new FileNotFoundException($"There is no '{path}'.");
 
         string? before = BaseDirectory, fileBefore = SourceFile;
-        BaseDirectory = Path.GetDirectoryName(Path.GetFullPath(path));
-        SourceFile = Path.GetFullPath(path);
+        string full = FilePathResolver(path);
         try
         {
-            return Run(Parse(Preprocess(File.ReadAllText(path))), UserScope);
+            string text = FileReader is { } reader ? reader(path) : File.ReadAllText(path);
+            BaseDirectory = Path.GetDirectoryName(full);
+            SourceFile = full;
+            return Run(Parse(Preprocess(text)), UserScope);
         }
         catch (HidlRuntimeException e) when (e.Line > 0)
         {
@@ -311,7 +323,7 @@ public class HIDLRuntime
     {
         string? folder = BaseDirectory;
         string path = Path.IsPathRooted(file) || folder is null ? file : Path.Combine(folder, file);
-        string full = Path.GetFullPath(path);
+        string full = FilePathResolver(path);
 
         if (including.Contains(full))
             throw new HidlRuntimeException($"'{file}' includes itself, round and round.");
