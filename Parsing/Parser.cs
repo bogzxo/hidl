@@ -22,6 +22,7 @@ public class Parser
     // the parser never sees them. It was a queue fed through a LINQ filter, then a copy of the tokens without them, which
     // was most of what parsing Hex's texts made
     private Token[] tokens = [];
+    private int count;
     private int position;
     private int last;
 
@@ -38,7 +39,7 @@ public class Parser
     /// <summary>Helper method for the first token from a place on that isn't a comment or a directive, the last one at the most.</summary>
     private int Over(int at)
     {
-        int end = tokens.Length - 1;
+        int end = count - 1;
         if (at > end)
             return end;
 
@@ -47,10 +48,11 @@ public class Parser
         return at;
     }
 
-    /// <summary>Helper method to start reading some tokens from the first of them.</summary>
-    private void Start(Token[] from)
+    /// <summary>Helper method to start reading some tokens from the first of them, the first so many of an array.</summary>
+    private void Start(Token[] from, int length)
     {
         tokens = from;
+        count = length;
         position = Over(0);
         last = 0;
     }
@@ -74,8 +76,10 @@ public class Parser
 
     private bool Next(TokenType type) => Peek().Type == type;
 
-    private bool NextOperator(params string[] operators) =>
-        Peek().Type == TokenType.BinaryOperation && Array.IndexOf(operators, Peek().Value) >= 0;
+    // A span rather than an array, an array was made for every call, seven of them for every value in a file and two
+    // fifths of what parsing Hex's texts made
+    private bool NextOperator(params ReadOnlySpan<string> operators) =>
+        Peek().Type == TokenType.BinaryOperation && operators.Contains(Peek().Value);
 
     private static ParseException Unexpected(Token token, string expected)
     {
@@ -114,12 +118,37 @@ public class Parser
     public ProgramStatement ProduceSyntaxTree(Token[] inputTokens, List<ParseException>? errors)
     {
         // The lexer always ends with the end of the file, tokens from anywhere else are given one
-        Start(inputTokens.Length > 0 && inputTokens[^1].Type == TokenType.EndOfFile
+        Token[] read = inputTokens.Length > 0 && inputTokens[^1].Type == TokenType.EndOfFile
             ? inputTokens
-            : [.. inputTokens, new Token(TokenType.EndOfFile, string.Empty)]);
+            : [.. inputTokens, new Token(TokenType.EndOfFile, string.Empty)];
+
+        return ProduceSyntaxTree(read, read.Length, errors);
+    }
+
+    /// <summary>
+    /// Lexes and parses a program, reading the tokens where the lexer built them rather than out of a copy, see
+    /// <see cref="Lexer.TokenizeShared"/>.
+    /// </summary>
+    internal static ProgramStatement Parse(string source, List<ParseException>? errors = null)
+    {
+        TokenBuffer built = Lexer.TokenizeShared(source);
+        try
+        {
+            return new Parser().ProduceSyntaxTree(built.Items, built.Count, errors);
+        }
+        finally
+        {
+            Lexer.Return(built);
+        }
+    }
+
+    /// <summary>Helper method to parse the first so many of some tokens, the last of them the end of the file.</summary>
+    private ProgramStatement ProduceSyntaxTree(Token[] inputTokens, int length, List<ParseException>? errors)
+    {
+        Start(inputTokens, length);
 
         // Which lines have documentation, worked out only for a file that has any
-        docs = HIDLDocs.Lines.Of(inputTokens);
+        docs = HIDLDocs.Lines.Of(inputTokens.AsSpan(0, length));
 
         List<IStatement> statements = [];
 
@@ -418,7 +447,7 @@ public class Parser
     private bool ArrowAhead()
     {
         int depth = 0;
-        for (int at = position; at < tokens.Length; at++)
+        for (int at = position; at < count; at++)
         {
             switch (tokens[at].Type)
             {
@@ -982,7 +1011,7 @@ public class Parser
 
             Token[] inside = Lexer.Tokenize(raw, lenient: false, start, i, startLine, startCol);
             var parser = new Parser();
-            parser.Start(inside);
+            parser.Start(inside, inside.Length);
             holes.Add(parser.ParseExpression());
             if (!parser.Next(TokenType.EndOfFile))
                 throw Unexpected(parser.Peek(), "'}' to end the expression in the template");

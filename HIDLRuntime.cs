@@ -262,7 +262,7 @@ public class HIDLRuntime
     /// <summary>
     /// Turns source into a syntax tree, which can be run as often as wanted.
     /// </summary>
-    public static ProgramStatement Parse(in string input) => new Parser().ProduceSyntaxTree(Lexer.Tokenize(input));
+    public static ProgramStatement Parse(in string input) => Parser.Parse(input);
 
     /// <summary>
     /// Parses a program and goes on after every mistake, handing back the tree of what did parse and every mistake, for an
@@ -274,7 +274,7 @@ public class HIDLRuntime
         try
         {
             string processed = Preprocessing.HIDLPreprocessor.Process(input, new Dictionary<string, string>(StringComparer.Ordinal));
-            return (new Parser().ProduceSyntaxTree(Lexer.Tokenize(processed), errors), errors);
+            return (Parser.Parse(processed, errors), errors);
         }
         catch (ParseException e)
         {

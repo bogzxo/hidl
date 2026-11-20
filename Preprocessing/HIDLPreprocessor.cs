@@ -1,4 +1,4 @@
-using System.Text;
+using System.Buffers;
 
 using Horizon.HIDL.Parsing;
 
@@ -38,49 +38,77 @@ public static class HIDLPreprocessor
     /// </summary>
     public static string Process(string source, Dictionary<string, string> defines)
     {
-        if (!source.Contains('#'))
+        // A # that starts no line (a colour, "#D97757") is no directive, and a program without one is handed back as it
+        // is. It was built again a character at a time, twice its size for every file with a colour in it
+        if (!HasDirective(source))
             return source;
 
-        var output = new StringBuilder(source.Length);
+        // What is left is never longer than what there was, a directive or a line left out is blanked
+        char[] output = ArrayPool<char>.Shared.Rent(source.Length);
+        int written = 0;
         var blocks = new Stack<Block>();
         bool keeping = true;
         int lineNumber = 0;
         int at = 0;
 
-        while (at <= source.Length)
+        try
         {
-            int end = source.IndexOf('\n', at);
-            if (end < 0) end = source.Length;
-            lineNumber++;
-
-            ReadOnlySpan<char> line = source.AsSpan(at, end - at);
-            ReadOnlySpan<char> trimmed = line.Trim();
-
-            if (trimmed.StartsWith("#"))
+            while (at <= source.Length)
             {
-                int column = line.Length - line.TrimStart().Length + 1;
-                Directive(trimmed[1..], defines, blocks, ref keeping, lineNumber, column);
+                int end = source.IndexOf('\n', at);
+                if (end < 0) end = source.Length;
+                lineNumber++;
 
-                // A carriage return stays, so the line ends the way the file's lines end
-                if (line.EndsWith("\r")) output.Append('\r');
-            }
-            else if (keeping)
-            {
-                output.Append(line);
-            }
-            else if (line.EndsWith("\r"))
-            {
-                output.Append('\r');
+                ReadOnlySpan<char> line = source.AsSpan(at, end - at);
+                ReadOnlySpan<char> trimmed = line.Trim();
+
+                if (trimmed.StartsWith("#"))
+                {
+                    int column = line.Length - line.TrimStart().Length + 1;
+                    Directive(trimmed[1..], defines, blocks, ref keeping, lineNumber, column);
+
+                    // A carriage return stays, so the line ends the way the file's lines end
+                    if (line.EndsWith("\r")) output[written++] = '\r';
+                }
+                else if (keeping)
+                {
+                    line.CopyTo(output.AsSpan(written));
+                    written += line.Length;
+                }
+                else if (line.EndsWith("\r"))
+                {
+                    output[written++] = '\r';
+                }
+
+                if (end < source.Length) output[written++] = '\n';
+                at = end + 1;
             }
 
-            if (end < source.Length) output.Append('\n');
-            at = end + 1;
+            if (blocks.Count > 0)
+                throw new ParseException($"The #if on line {blocks.Peek().Line} is never closed with an #endif.", blocks.Peek().Line, 1);
+
+            return new string(output, 0, written);
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(output);
+        }
+    }
+
+    /// <summary>Helper method for whether any line of a program starts with a #, spaces before it or not.</summary>
+    private static bool HasDirective(string source)
+    {
+        for (int hash = source.IndexOf('#'); hash >= 0; hash = source.IndexOf('#', hash + 1))
+        {
+            int start = hash;
+            while (start > 0 && source[start - 1] != '\n' && char.IsWhiteSpace(source[start - 1]))
+                start--;
+
+            if (start == 0 || source[start - 1] == '\n')
+                return true;
         }
 
-        if (blocks.Count > 0)
-            throw new ParseException($"The #if on line {blocks.Peek().Line} is never closed with an #endif.", blocks.Peek().Line, 1);
-
-        return output.ToString();
+        return false;
     }
 
     /// <summary>
@@ -90,7 +118,7 @@ public static class HIDLPreprocessor
     public static IReadOnlyDictionary<string, string> Read(string source)
     {
         var defines = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (!source.Contains('#'))
+        if (!HasDirective(source))
             return defines;
 
         try

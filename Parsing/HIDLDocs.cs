@@ -46,7 +46,7 @@ public static class HIDLDocs
         private readonly HashSet<int> comments = [];
 
         /// <summary>The lines of some tokens, null when none of them is documentation (nearly every file), nothing to work out.</summary>
-        public static Lines? Of(Token[] tokens)
+        public static Lines? Of(ReadOnlySpan<Token> tokens)
         {
             Lines? lines = null;
             foreach (Token token in tokens)

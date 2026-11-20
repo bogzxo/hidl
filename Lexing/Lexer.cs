@@ -71,30 +71,64 @@ public static class Lexer
     /// </summary>
     internal static Token[] Tokenize(string src, bool lenient, int start, int end, int line, int col)
     {
-        // Built into a list kept on the thread and handed out as an array of exactly the tokens there are. It was a list
+        // Built into a buffer kept on the thread and handed out as an array of exactly the tokens there are. It was a list
         // as long as a quarter of the file every time, 640 KB for Hex's texts, and then a copy of it
-        List<Token> tokens = building ?? new List<Token>(256);
-        building = null;
-        tokens.Clear();
-
+        TokenBuffer tokens = Rent();
         try
         {
-            return TokenizeInto(tokens, src, lenient, start, end, line, col);
+            TokenizeInto(tokens, src, lenient, start, end, line, col);
+            return tokens.Items.AsSpan(0, tokens.Count).ToArray();
         }
         finally
         {
-            if (tokens.Capacity <= MAX_KEPT_TOKENS)
-                building = tokens;
+            Return(tokens);
         }
     }
 
-    // The list tokens are built in, kept for the next file unless a huge one made it huge
+    /// <summary>
+    /// Cuts source into tokens for a parse that reads them where they were built, without the copy an array of its own
+    /// would be (a fifth of what parsing Hex's texts made). Handed back with <see cref="Return"/> once the parse is done.
+    /// </summary>
+    internal static TokenBuffer TokenizeShared(string src)
+    {
+        TokenBuffer tokens = Rent();
+        try
+        {
+            TokenizeInto(tokens, src, lenient: false, 0, src.Length, 1, 1);
+            return tokens;
+        }
+        catch
+        {
+            Return(tokens);
+            throw;
+        }
+    }
+
+    // The buffer tokens are built in, kept for the next file unless a huge one made it huge
     private const int MAX_KEPT_TOKENS = 1 << 16;
 
     [ThreadStatic]
-    private static List<Token>? building;
+    private static TokenBuffer? building;
 
-    private static Token[] TokenizeInto(List<Token> tokens, string src, bool lenient, int start, int end, int line, int col)
+    /// <summary>Helper method to take the thread's buffer, or a new one while the thread's is being read (a template's holes are lexed in the middle of a parse).</summary>
+    private static TokenBuffer Rent()
+    {
+        TokenBuffer tokens = building ?? new TokenBuffer();
+        building = null;
+        tokens.Count = 0;
+        return tokens;
+    }
+
+    /// <summary>Helper method to give a buffer back for the next file, the texts of its tokens let go of.</summary>
+    internal static void Return(TokenBuffer tokens)
+    {
+        Array.Clear(tokens.Items, 0, tokens.Count);
+        tokens.Count = 0;
+        if (tokens.Items.Length <= MAX_KEPT_TOKENS)
+            building = tokens;
+    }
+
+    private static void TokenizeInto(TokenBuffer tokens, string src, bool lenient, int start, int end, int line, int col)
     {
         var names = pool ??= new HashSet<string>(StringComparer.Ordinal);
         if (names.Count > MAX_POOLED)
@@ -350,7 +384,6 @@ public static class Lexer
         }
 
         tokens.Add(new Token(TokenType.EndOfFile, string.Empty, line, col, index, 0));
-        return [.. tokens];
     }
 
     /// <summary>
@@ -413,5 +446,22 @@ public static class Lexer
         }
 
         return text.ToString();
+    }
+}
+
+/// <summary>
+/// Tokens as the lexer builds them, an array as long as it has had to be and how many of it are tokens. A list was the
+/// same, but a parse can't read a list's array where it is.
+/// </summary>
+internal sealed class TokenBuffer
+{
+    public Token[] Items = new Token[256];
+    public int Count;
+
+    public void Add(in Token token)
+    {
+        if (Count == Items.Length)
+            Array.Resize(ref Items, Items.Length * 2);
+        Items[Count++] = token;
     }
 }
