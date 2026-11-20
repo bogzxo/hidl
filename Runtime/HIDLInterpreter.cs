@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Numerics;
 
 using Horizon.HIDL.Library;
@@ -194,7 +195,8 @@ public class HIDLInterpreter
 
     private IRuntimeValue EvaluateObjectLiteral(ObjectLiteralExpression statement, Environment env)
     {
-        Dictionary<string, IRuntimeValue> properties = [];
+        // As big as the keys written, a spread or two can still grow it
+        Dictionary<string, IRuntimeValue> properties = new(statement.Properties.Count);
 
         foreach (PropertyExpression property in statement.Properties)
         {
@@ -762,6 +764,36 @@ public class HIDLInterpreter
         IRuntimeValue source = Evaluate(statement.Source, env);
         IRuntimeValue result = Values.Null;
 
+        // A list is walked over a copy of its items, so the loop can change the list without tripping over itself. The
+        // copy is borrowed rather than made, and the turns are walked here rather than through an enumerator
+        if (source is ListValue list)
+        {
+            int count = list.Count;
+            IRuntimeValue[] items = ArrayPool<IRuntimeValue>.Shared.Rent(count);
+            list.Items.CopyTo(items);
+
+            try
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    Environment turn = new(env);
+                    if (statement.Key is { } index)
+                        turn.Declare(index, Values.Number(i));
+                    turn.Declare(statement.Variable, items[i]);
+
+                    result = EvaluateBlock(statement.Body, turn);
+                    if (LeaveLoop()) break;
+                }
+            }
+            finally
+            {
+                Array.Clear(items, 0, count);
+                ArrayPool<IRuntimeValue>.Shared.Return(items);
+            }
+
+            return result;
+        }
+
         // for (key, value in object) and for (index, item in list)
         if (statement.Key is { } keyName)
         {
@@ -928,11 +960,11 @@ public class HIDLInterpreter
 
     private static IRuntimeValue OperateNumbers(float a, float b, string op) => op switch
     {
-        "+" => new NumberValue(a + b),
-        "-" => new NumberValue(a - b),
-        "*" => new NumberValue(a * b),
-        "/" => new NumberValue(a / b),
-        "%" => new NumberValue(a % b),
+        "+" => Values.Number(a + b),
+        "-" => Values.Number(a - b),
+        "*" => Values.Number(a * b),
+        "/" => Values.Number(a / b),
+        "%" => Values.Number(a % b),
         "<" => Values.Bool(a < b),
         ">" => Values.Bool(a > b),
         "<=" => Values.Bool(a <= b),

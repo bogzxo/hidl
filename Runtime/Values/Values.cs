@@ -17,6 +17,27 @@ public static class Values
 
     public static IRuntimeValue Bool(bool value) => value ? True : False;
 
+    // The whole numbers 0 to 255 made once. Values never change, so the count of a list or the index of a for is the
+    // same box every time rather than a new one
+    private static readonly IRuntimeValue[] SmallNumbers = MakeSmallNumbers();
+
+    private static IRuntimeValue[] MakeSmallNumbers()
+    {
+        var made = new IRuntimeValue[256];
+        for (int i = 0; i < made.Length; i++)
+            made[i] = new NumberValue(i);
+        return made;
+    }
+
+    /// <summary>A number as a value, the small whole ones handed out from the ones made already.</summary>
+    internal static IRuntimeValue Number(float number) => Shared(number) ?? new NumberValue(number);
+
+    /// <summary>A small whole number already made, null for any other.</summary>
+    internal static IRuntimeValue? Shared(float number) =>
+        number >= 0.0f && number < SmallNumbers.Length && number == MathF.Floor(number) && !float.IsNegative(number)
+            ? SmallNumbers[(int)number]
+            : null;
+
     /// <summary>
     /// A number as text. Whole numbers without a point, the rest with as many digits as it takes and no more.
     /// </summary>

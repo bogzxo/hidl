@@ -862,23 +862,15 @@ public class Parser
         }
     }
 
-    // The numbers the parse has made a value of, by what they are, and the small whole ones made once for every parse
+    // The numbers the parse has made a value of, by what they are, the small whole ones made once for every parse (see
+    // Values.Number)
     private Dictionary<float, IRuntimeValue>? numbers;
-    private static readonly IRuntimeValue[] SmallNumbers = MakeSmallNumbers();
-
-    private static IRuntimeValue[] MakeSmallNumbers()
-    {
-        var made = new IRuntimeValue[256];
-        for (int i = 0; i < made.Length; i++)
-            made[i] = new NumberValue(i);
-        return made;
-    }
 
     /// <summary>Helper method to hand out one value for every number, values never change so they can be shared.</summary>
     private IRuntimeValue NumberConstant(float number)
     {
-        if (number >= 0.0f && number < SmallNumbers.Length && number == MathF.Floor(number) && !float.IsNegative(number))
-            return SmallNumbers[(int)number];
+        if (Values.Shared(number) is { } small)
+            return small;
 
         numbers ??= [];
         if (!numbers.TryGetValue(number, out IRuntimeValue? value))

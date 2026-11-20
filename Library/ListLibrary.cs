@@ -25,7 +25,7 @@ public static class ListLibrary
     /// </summary>
     public static IRuntimeValue Member(ListValue list, string name) => name switch
     {
-        "count" or "length" => new NumberValue(list.Count),
+        "count" or "length" => Values.Number(list.Count),
         "first" => list.Count > 0 ? list[0] : Values.Null,
         "last" => list.Count > 0 ? list[^1] : Values.Null,
         _ when Methods.Contains(name) => Natives.Function(name, args => Call(list, name, args)),
@@ -78,7 +78,7 @@ public static class ListLibrary
 
             case "remove":
             {
-                int index = list.Items.FindIndex(item => Values.AreEqual(item, args[0]));
+                int index = Find(list, args[0]);
                 if (index >= 0) list.Items.RemoveAt(index);
                 return Values.Bool(index >= 0);
             }
@@ -99,13 +99,13 @@ public static class ListLibrary
                 return list;
 
             case "contains":
-                return Values.Bool(list.Items.Exists(item => Values.AreEqual(item, args[0])));
+                return Values.Bool(Find(list, args[0]) >= 0);
 
             case "index_of":
-                return new NumberValue(list.Items.FindIndex(item => Values.AreEqual(item, args[0])));
+                return new NumberValue(Find(list, args[0]));
 
             case "last_index_of":
-                return new NumberValue(list.Items.FindLastIndex(item => Values.AreEqual(item, args[0])));
+                return new NumberValue(Find(list, args[0], last: true));
 
             case "join":
                 return new StringValue(string.Join(args.Text(0, ", "), list.Items.Select(Values.Text)));
@@ -278,6 +278,31 @@ public static class ListLibrary
             default:
                 throw new HidlRuntimeException($"A list has no '{name}'.");
         }
+    }
+
+    /// <summary>
+    /// Helper method for where an item equal to a value is, the first or the last of them, -1 for nowhere. A loop rather
+    /// than a search with a lambda, which was a closure and a delegate for every contains.
+    /// </summary>
+    private static int Find(ListValue list, IRuntimeValue value, bool last = false)
+    {
+        List<IRuntimeValue> items = list.Items;
+        if (last)
+        {
+            for (int i = items.Count - 1; i >= 0; i--)
+            {
+                if (Values.AreEqual(items[i], value)) return i;
+            }
+
+            return -1;
+        }
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (Values.AreEqual(items[i], value)) return i;
+        }
+
+        return -1;
     }
 
     /// <summary>

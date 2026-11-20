@@ -16,12 +16,18 @@ public class Environment
     private Dictionary<string, IRuntimeValue>? variables;
     private HashSet<string>? constants;
 
-    // The first few variables of a scope, kept in two little arrays until there are too many of them and they go into
-    // the dictionary. A call with a parameter or two, or the turn of a for, was a dictionary every time
+    // The first few variables of a scope, kept in a little array until there are too many of them and they go into the
+    // dictionary. A call with a parameter or two, or the turn of a for, was a dictionary every time. A name and its value
+    // side by side, two arrays were two for every scope
     private const int MOST_SMALL = 8;
-    private string[]? names;
-    private IRuntimeValue[]? values;
+    private Slot[]? slots;
     private int count;
+
+    private struct Slot(string name, IRuntimeValue value)
+    {
+        public readonly string Name = name;
+        public IRuntimeValue Value = value;
+    }
 
     private static readonly Dictionary<string, IRuntimeValue> Nothing = [];
 
@@ -51,7 +57,7 @@ public class Environment
     {
         for (int i = 0; i < count; i++)
         {
-            if (string.Equals(names![i], name, StringComparison.Ordinal))
+            if (string.Equals(slots![i].Name, name, StringComparison.Ordinal))
                 return i;
         }
 
@@ -65,7 +71,7 @@ public class Environment
             return variables.TryGetValue(name, out value!);
 
         int at = IndexOf(name);
-        value = at >= 0 ? values![at] : Values.Null;
+        value = at >= 0 ? slots![at].Value : Values.Null;
         return at >= 0;
     }
 
@@ -74,10 +80,9 @@ public class Environment
     {
         variables = new Dictionary<string, IRuntimeValue>(Math.Max(count * 2, 4));
         for (int i = 0; i < count; i++)
-            variables.Add(names![i], values![i]);
+            variables.Add(slots![i].Name, slots[i].Value);
 
-        names = null;
-        values = null;
+        slots = null;
         count = 0;
     }
 
@@ -107,16 +112,10 @@ public class Environment
         IRuntimeValue stored = value ?? Values.Null;
         if (variables is null && count < MOST_SMALL)
         {
-            if (names is null || count == names.Length)
-            {
-                int size = names is null ? 4 : MOST_SMALL;
-                Array.Resize(ref names, size);
-                Array.Resize(ref values, size);
-            }
+            if (slots is null || count == slots.Length)
+                Array.Resize(ref slots, slots is null ? 4 : MOST_SMALL);
 
-            names[count] = identifier;
-            values![count] = stored;
-            count++;
+            slots[count++] = new Slot(identifier, stored);
         }
         else
         {
@@ -166,7 +165,7 @@ public class Environment
         if (owner.variables is not null)
             owner.variables[name] = value;
         else
-            owner.values![owner.IndexOf(name)] = value;
+            owner.slots![owner.IndexOf(name)].Value = value;
         return value;
     }
 
@@ -178,8 +177,7 @@ public class Environment
         variables?.Clear();
         if (count > 0)
         {
-            Array.Clear(names!);
-            Array.Clear(values!);
+            Array.Clear(slots!);
             count = 0;
         }
 
@@ -242,7 +240,7 @@ public class Environment
             result[item.Key] = item.Value;
 
         for (int i = 0; i < count; i++)
-            result[names![i]] = values![i];
+            result[slots![i].Name] = slots[i].Value;
 
         return result;
     }
@@ -260,10 +258,8 @@ public class Environment
             return;
 
         count--;
-        Array.Copy(names!, at + 1, names!, at, count - at);
-        Array.Copy(values!, at + 1, values!, at, count - at);
-        names![count] = null!;
-        values![count] = null!;
+        Array.Copy(slots!, at + 1, slots!, at, count - at);
+        slots![count] = default;
     }
 
     internal void Copy(Environment other)
@@ -271,8 +267,7 @@ public class Environment
         constants = other.constants is null ? null : [.. other.constants];
         variables = other.variables is null ? null : new Dictionary<string, IRuntimeValue>(other.variables);
         systemVariables = other.systemVariables is null ? null : new Dictionary<string, IRuntimeValue>(other.systemVariables);
-        names = other.names is null ? null : (string[])other.names.Clone();
-        values = other.values is null ? null : (IRuntimeValue[])other.values.Clone();
+        slots = other.slots is null ? null : (Slot[])other.slots.Clone();
         count = other.count;
     }
 }

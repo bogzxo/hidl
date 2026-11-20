@@ -29,7 +29,7 @@ public static class TextLibrary
     /// </summary>
     public static IRuntimeValue Member(string text, string name) => name switch
     {
-        "length" or "count" => new NumberValue(text.Length),
+        "length" or "count" => Values.Number(text.Length),
         _ when Methods.Contains(name) => Natives.Function(name, args => Call(text, name, args)),
         _ => throw new HidlRuntimeException($"A text has no '{name}'.{Suggest.Nearest(name, Everything)} It has {Suggest.Listed(Everything)}.")
     };
@@ -181,9 +181,9 @@ public static class TextLibrary
 
         scope.Declare("len", Natives.Function("len", args => args[0] switch
         {
-            ListValue list => new NumberValue(list.Count),
-            StringValue text => new NumberValue(text.Value?.Length ?? 0),
-            ObjectValue obj => new NumberValue(obj.Properties.Count),
+            ListValue list => Values.Number(list.Count),
+            StringValue text => Values.Number(text.Value?.Length ?? 0),
+            ObjectValue obj => Values.Number(obj.Properties.Count),
             _ => throw args.Wrong($"a {Values.TypeName(args[0])} has no length.")
         }), true);
     }

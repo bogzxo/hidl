@@ -38,7 +38,7 @@ public static class Natives
     /// </summary>
     public static ObjectValue Object(params (string Name, IRuntimeValue Value)[] members)
     {
-        Dictionary<string, IRuntimeValue> properties = [];
+        Dictionary<string, IRuntimeValue> properties = new(members.Length);
         foreach (var (name, value) in members)
             properties[name] = value;
 
