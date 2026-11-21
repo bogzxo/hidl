@@ -5,7 +5,7 @@ namespace Horizon.HIDL.Parsing;
 /// <summary>
 /// What a run of tokens declares, worked out from the tokens alone for an editor that colours, outlines or looks up
 /// names without parsing (and so copes with a file halfway through being typed). The names a let or a const makes,
-/// one or a few of them (<c>let { a, b } = thing</c>), and the parameters of an arrow (<c>x =&gt;</c>, <c>(a, b) =&gt;</c>).
+/// one or a few of them (<c>let { a, b } = thing</c>), and the parameters of an arrow (<c>x =></c>, <c>(a, b) =></c>).
 /// </summary>
 public static class HIDLDeclarations
 {
@@ -48,12 +48,12 @@ public static class HIDLDeclarations
         return names;
     }
 
-    /// <summary>Whether the name at a place is the one parameter of an arrow, <c>x =&gt; ...</c>.</summary>
+    /// <summary>Whether the name at a place is the one parameter of an arrow, <c>x => ...</c>.</summary>
     public static bool IsArrowParameter(Token[] tokens, int at) =>
         at >= 0 && at < tokens.Length && tokens[at].Type == TokenType.Identifier && Skip(tokens, at + 1) is var next && next < tokens.Length && tokens[next].Type == TokenType.Arrow;
 
     /// <summary>
-    /// Whether the bracket at a place opens the parameters of an arrow, <c>(a, b) =&gt;</c>, which is whether the token after
+    /// Whether the bracket at a place opens the parameters of an arrow, <c>(a, b) =></c>, which is whether the token after
     /// the one that closes it is an arrow.
     /// </summary>
     public static bool OpensArrowParameters(Token[] tokens, int at)

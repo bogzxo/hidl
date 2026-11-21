@@ -441,7 +441,7 @@ public class Parser
     }
 
     /// <summary>
-    /// Whether the brackets that open here are the parameters of an arrow, <c>(a, b) =&gt;</c>, which is the token after
+    /// Whether the brackets that open here are the parameters of an arrow, <c>(a, b) =></c>, which is the token after
     /// the one that closes them.
     /// </summary>
     private bool ArrowAhead()
@@ -467,7 +467,7 @@ public class Parser
     }
 
     /// <summary>
-    /// Helper method to read an arrow, <c>x =&gt; x * 2</c>, <c>(a, b) =&gt; a + b</c> or <c>() =&gt; { ... }</c>. An expression
+    /// Helper method to read an arrow, <c>x => x * 2</c>, <c>(a, b) => a + b</c> or <c>() => { ... }</c>. An expression
     /// after the arrow is what the function hands back, a block is a body like any function's.
     /// </summary>
     private IExpression ParseArrow()
