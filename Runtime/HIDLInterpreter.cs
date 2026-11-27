@@ -83,7 +83,7 @@ public class HIDLInterpreter
         return statement.Type switch
         {
             NodeType.Program => EvaluateProgram((ProgramStatement)statement, env),
-            NodeType.NumericLiteral => ((NumericLiteralExpression)statement) is { Constant: { } number } ? number : new NumberValue(((NumericLiteralExpression)statement).Value),
+            NodeType.NumericLiteral => ((NumericLiteralExpression)statement) is { Constant: { } number } ? number : Values.Number(((NumericLiteralExpression)statement).Value),
             NodeType.BooleanLiteral => Values.Bool(((BooleanLiteralExpression)statement).Value),
             NodeType.StringLiteral => ((StringLiteralExpression)statement) is { Constant: { } text } ? text : new StringValue(((StringLiteralExpression)statement).Value),
             NodeType.Template => EvaluateTemplate((TemplateExpression)statement, env),
@@ -308,6 +308,7 @@ public class HIDLInterpreter
 
     private IRuntimeValue EvaluateFunctionDeclaration(FunctionDeclarationExpression statement, Environment env)
     {
+        env.MarkCaptured();
         var function = new FunctionValue(statement.Name, statement.Parameters, env, statement.Body) { Defaults = statement.Defaults };
         Sources?.Declaration(statement.Name, At(statement.Span) with { Doc = statement.Doc });
 
@@ -315,8 +316,11 @@ public class HIDLInterpreter
         return env.Resolve(statement.Name) == env ? env.Assign(statement.Name, function) : env.Declare(statement.Name, function);
     }
 
-    private IRuntimeValue EvaluateAnonymousFunction(AnonymousFunctionDeclarationExpression statement, Environment env) =>
-        new AnonymousFunctionValue(statement.Parameters, env, statement.Body) { Defaults = statement.Defaults };
+    private IRuntimeValue EvaluateAnonymousFunction(AnonymousFunctionDeclarationExpression statement, Environment env)
+    {
+        env.MarkCaptured();
+        return new AnonymousFunctionValue(statement.Parameters, env, statement.Body) { Defaults = statement.Defaults };
+    }
 
     private IRuntimeValue EvaluateDelete(DeleteStatement statement, Environment env)
     {
@@ -514,9 +518,9 @@ public class HIDLInterpreter
 
                 string name = KeyOf(expression, env);
                 if (name == "length")
-                    return new NumberValue(MathF.Sqrt(Dot(components[..count], components[..count])));
+                    return Values.Number(MathF.Sqrt(Dot(components[..count], components[..count])));
 
-                return new NumberValue(components[ComponentIndex(name, count)]);
+                return Values.Number(components[ComponentIndex(name, count)]);
             }
 
             // A thing of the host's, which answers for its own members
@@ -657,6 +661,29 @@ public class HIDLInterpreter
         }
     }
 
+    private readonly Stack<Environment> scopePool = new(16);
+
+    private Environment RentScope(Environment? parent)
+    {
+        if (scopePool.Count > 0)
+        {
+            Environment scope = scopePool.Pop();
+            scope.AttachParent(parent);
+            return scope;
+        }
+
+        return new Environment(parent);
+    }
+
+    private void ReturnScope(Environment scope)
+    {
+        if (scope.Captured || scopePool.Count >= 64)
+            return;
+
+        scope.ResetForPool();
+        scopePool.Push(scope);
+    }
+
     private IRuntimeValue Run(string[] parameters, Environment closure, IStatement[] body, IRuntimeValue[] args, IExpression?[]? defaults)
     {
         if (depth >= MAX_CALL_DEPTH)
@@ -666,37 +693,44 @@ public class HIDLInterpreter
 
         // A parameter that isn't handed over (or is handed null) is its default, worked out in the function's own scope
         // so it can go by the parameters before it
-        Environment scope = new(closure);
-        for (int i = 0; i < parameters.Length; i++)
-        {
-            IRuntimeValue value = i < args.Length ? args[i] : Values.Null;
-            if (value is NullValue && defaults?[i] is { } fallback)
-                value = Evaluate(fallback, scope);
-
-            scope.Declare(parameters[i], value);
-        }
-
-        // Whatever was on its way out of the caller waits, this function has flow of its own
-        Flow outerFlow = flow;
-        IRuntimeValue outerReturned = returned;
-        flow = Flow.None;
-        depth++;
-
+        Environment scope = RentScope(closure);
         try
         {
-            IRuntimeValue result = EvaluateBlock(body, scope);
-            if (flow == Flow.Return)
-                result = returned;
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                IRuntimeValue value = i < args.Length ? args[i] : Values.Null;
+                if (value is NullValue && defaults?[i] is { } fallback)
+                    value = Evaluate(fallback, scope);
 
-            return result;
+                scope.Declare(parameters[i], value);
+            }
+
+            // Whatever was on its way out of the caller waits, this function has flow of its own
+            Flow outerFlow = flow;
+            IRuntimeValue outerReturned = returned;
+            flow = Flow.None;
+            depth++;
+
+            try
+            {
+                IRuntimeValue result = EvaluateBlock(body, scope);
+                if (flow == Flow.Return)
+                    result = returned;
+
+                return result;
+            }
+            finally
+            {
+                // Put back whether the function came to an end or threw, an error half way down a call left the depth
+                // and a return on its way out for whatever the runtime ran next
+                depth--;
+                flow = outerFlow;
+                returned = outerReturned;
+            }
         }
         finally
         {
-            // Put back whether the function came to an end or threw, an error half way down a call left the depth
-            // and a return on its way out for whatever the runtime ran next
-            depth--;
-            flow = outerFlow;
-            returned = outerReturned;
+            ReturnScope(scope);
         }
     }
 
@@ -769,14 +803,17 @@ public class HIDLInterpreter
         if (source is ListValue list)
         {
             int count = list.Count;
+            if (count == 0) return result;
+
             IRuntimeValue[] items = ArrayPool<IRuntimeValue>.Shared.Rent(count);
             list.Items.CopyTo(items);
+            Environment? turn = null;
 
             try
             {
                 for (int i = 0; i < count; i++)
                 {
-                    Environment turn = new(env);
+                    turn = NextLoopScope(turn, env);
                     if (statement.Key is { } index)
                         turn.Declare(index, Values.Number(i));
                     turn.Declare(statement.Variable, items[i]);
@@ -787,6 +824,7 @@ public class HIDLInterpreter
             }
             finally
             {
+                if (turn is not null) ReturnScope(turn);
                 Array.Clear(items, 0, count);
                 ArrayPool<IRuntimeValue>.Shared.Return(items);
             }
@@ -797,30 +835,55 @@ public class HIDLInterpreter
         // for (key, value in object) and for (index, item in list)
         if (statement.Key is { } keyName)
         {
-            foreach (var (key, value) in ListLibrary.WalkPairs(source))
+            Environment? pair = null;
+            try
             {
-                Environment pair = new(env);
-                pair.Declare(keyName, key);
-                pair.Declare(statement.Variable, value);
+                foreach (var (key, value) in ListLibrary.WalkPairs(source))
+                {
+                    pair = NextLoopScope(pair, env);
+                    pair.Declare(keyName, key);
+                    pair.Declare(statement.Variable, value);
 
-                result = EvaluateBlock(statement.Body, pair);
-                if (LeaveLoop()) break;
+                    result = EvaluateBlock(statement.Body, pair);
+                    if (LeaveLoop()) break;
+                }
+            }
+            finally
+            {
+                if (pair is not null) ReturnScope(pair);
             }
 
             return result;
         }
 
         // Every turn gets a scope of its own, so a function made in the loop keeps the value of its turn
-        foreach (IRuntimeValue item in ListLibrary.Walk(source))
+        Environment? itemScope = null;
+        try
         {
-            Environment turn = new(env);
-            turn.Declare(statement.Variable, item);
+            foreach (IRuntimeValue item in ListLibrary.Walk(source))
+            {
+                itemScope = NextLoopScope(itemScope, env);
+                itemScope.Declare(statement.Variable, item);
 
-            result = EvaluateBlock(statement.Body, turn);
-            if (LeaveLoop()) break;
+                result = EvaluateBlock(statement.Body, itemScope);
+                if (LeaveLoop()) break;
+            }
+        }
+        finally
+        {
+            if (itemScope is not null) ReturnScope(itemScope);
         }
 
         return result;
+    }
+
+    private Environment NextLoopScope(Environment? current, Environment parent)
+    {
+        if (current is null || current.Captured)
+            return RentScope(parent);
+
+        current.Reset(resetSystem: true);
+        return current;
     }
 
     /// <summary>
@@ -853,6 +916,9 @@ public class HIDLInterpreter
         // The unary ones only have a left side
         if (expression.Right is null)
         {
+            if (expression.Operator is "-" or "+" && TryEvaluateNumber(expression, env, out float unary))
+                return Values.Number(unary);
+
             IRuntimeValue operand = Evaluate(expression.Left, env);
             return expression.Operator switch
             {
@@ -861,6 +927,18 @@ public class HIDLInterpreter
                 "+" => operand,
                 _ => throw new HidlRuntimeException($"'{expression.Operator}' can't be put in front of a value.")
             };
+        }
+
+        if (TryEvaluateNumber(expression.Left, env, out float leftNumber) &&
+            TryEvaluateNumber(expression.Right, env, out float rightNumber))
+        {
+            switch (expression.Operator)
+            {
+                case "==": return Values.Bool(leftNumber == rightNumber);
+                case "!=": return Values.Bool(leftNumber != rightNumber);
+                case "+" or "-" or "*" or "/" or "%" or "<" or ">" or "<=" or ">=" or "&" or "|":
+                    return OperateNumbers(leftNumber, rightNumber, expression.Operator);
+            }
         }
 
         // && and || only look at the right side when they have to
@@ -893,10 +971,59 @@ public class HIDLInterpreter
         return Operate(Evaluate(expression.Left, env), Evaluate(expression.Right, env), expression.Operator);
     }
 
+    private static bool TryEvaluateNumber(IExpression expression, Environment env, out float result)
+    {
+        switch (expression)
+        {
+            case NumericLiteralExpression literal:
+                result = literal.Value;
+                return true;
+
+            case IdentifierExpression identifier:
+                if (env.Lookup(identifier.Symbol) is NumberValue number)
+                {
+                    result = number.Value;
+                    return true;
+                }
+                result = 0.0f;
+                return false;
+
+            case BinaryExpression { Right: null, Operator: "+" or "-", Left: { } inner } unary:
+                if (TryEvaluateNumber(inner, env, out float innerValue))
+                {
+                    result = unary.Operator == "-" ? -innerValue : innerValue;
+                    return true;
+                }
+                result = 0.0f;
+                return false;
+
+            case BinaryExpression { Right: { } rhs, Operator: "+" or "-" or "*" or "/" or "%" } bin:
+                if (TryEvaluateNumber(bin.Left, env, out float lhs) && TryEvaluateNumber(rhs, env, out float rhsValue))
+                {
+                    result = bin.Operator switch
+                    {
+                        "+" => lhs + rhsValue,
+                        "-" => lhs - rhsValue,
+                        "*" => lhs * rhsValue,
+                        "/" => lhs / rhsValue,
+                        "%" => lhs % rhsValue,
+                        _ => 0.0f
+                    };
+                    return true;
+                }
+                result = 0.0f;
+                return false;
+
+            default:
+                result = 0.0f;
+                return false;
+        }
+    }
+
     private static IRuntimeValue Negate(IRuntimeValue operand)
     {
         if (operand is NumberValue number)
-            return new NumberValue(-number.Value);
+            return Values.Number(-number.Value);
 
         Span<float> components = stackalloc float[4];
         if (Values.TryGetComponents(operand, components, out int count))

@@ -8,7 +8,24 @@ namespace Horizon.HIDL.Runtime;
 /// </summary>
 public class Environment
 {
-    public Environment? Parent { get; init; }
+    public Environment? Parent { get; private set; }
+
+    internal bool Captured { get; private set; }
+
+    internal void MarkCaptured()
+    {
+        for (Environment? current = this; current is not null && !current.Captured; current = current.Parent)
+            current.Captured = true;
+    }
+
+    internal void AttachParent(Environment? parent) => Parent = parent;
+
+    internal void ResetForPool()
+    {
+        Parent = null;
+        Captured = false;
+        Reset(resetSystem: true);
+    }
 
     // Made when something is first put in them. A scope is made for every call and every turn of a for, and the
     // system variables are only ever in the user scope, three collections a scope was most of the garbage of a call
@@ -177,7 +194,7 @@ public class Environment
         variables?.Clear();
         if (count > 0)
         {
-            Array.Clear(slots!);
+            Array.Clear(slots!, 0, count);
             count = 0;
         }
 

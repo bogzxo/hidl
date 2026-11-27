@@ -103,15 +103,17 @@ public static class HIDLWriter
         if (string.IsNullOrEmpty(name) || Lexer.IsKeyword(name))
             return false;
 
-        try
-        {
-            Token[] tokens = Lexer.Tokenize(name);
-            return tokens.Length == 2 && tokens[0].Type == TokenType.Identifier && tokens[0].Value == name;
-        }
-        catch
-        {
+        if (!char.IsLetter(name[0]) && name[0] != '_')
             return false;
+
+        for (int i = 1; i < name.Length; i++)
+        {
+            char c = name[i];
+            if (!char.IsLetterOrDigit(c) && c != '_')
+                return false;
         }
+
+        return true;
     }
 
     /// <summary>A value written into text at a depth, so a writer of whole files (HIDLDocument) lays nested values out the same way.</summary>
@@ -155,16 +157,34 @@ public static class HIDLWriter
                 break;
 
             case Vector2Value vector:
-                AppendVector(text, [vector.Value.X, vector.Value.Y]);
+            {
+                Span<float> components = stackalloc float[2];
+                components[0] = vector.Value.X;
+                components[1] = vector.Value.Y;
+                AppendVector(text, components);
                 break;
+            }
 
             case Vector3Value vector:
-                AppendVector(text, [vector.Value.X, vector.Value.Y, vector.Value.Z]);
+            {
+                Span<float> components = stackalloc float[3];
+                components[0] = vector.Value.X;
+                components[1] = vector.Value.Y;
+                components[2] = vector.Value.Z;
+                AppendVector(text, components);
                 break;
+            }
 
             case Vector4Value vector:
-                AppendVector(text, [vector.Value.X, vector.Value.Y, vector.Value.Z, vector.Value.W]);
+            {
+                Span<float> components = stackalloc float[4];
+                components[0] = vector.Value.X;
+                components[1] = vector.Value.Y;
+                components[2] = vector.Value.Z;
+                components[3] = vector.Value.W;
+                AppendVector(text, components);
                 break;
+            }
 
             case NativeValue native:
                 Append(text, native.AccessorCallback(), depth, trailing);

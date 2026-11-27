@@ -17,25 +17,27 @@ public static class Values
 
     public static IRuntimeValue Bool(bool value) => value ? True : False;
 
-    // The whole numbers 0 to 255 made once. Values never change, so the count of a list or the index of a for is the
-    // same box every time rather than a new one
+    // The small whole numbers made once. Values never change, so loop indices and counts hand back an existing box
+    // rather than allocating a new one every step
+    private const int MIN_SMALL = -16;
+    private const int MAX_SMALL = 512;
     private static readonly IRuntimeValue[] SmallNumbers = MakeSmallNumbers();
 
     private static IRuntimeValue[] MakeSmallNumbers()
     {
-        var made = new IRuntimeValue[256];
+        var made = new IRuntimeValue[MAX_SMALL - MIN_SMALL + 1];
         for (int i = 0; i < made.Length; i++)
-            made[i] = new NumberValue(i);
+            made[i] = new NumberValue(MIN_SMALL + i);
         return made;
     }
 
     /// <summary>A number as a value, the small whole ones handed out from the ones made already.</summary>
-    internal static IRuntimeValue Number(float number) => Shared(number) ?? new NumberValue(number);
+    public static IRuntimeValue Number(float number) => Shared(number) ?? new NumberValue(number);
 
     /// <summary>A small whole number already made, null for any other.</summary>
     internal static IRuntimeValue? Shared(float number) =>
-        number >= 0.0f && number < SmallNumbers.Length && number == MathF.Floor(number) && !float.IsNegative(number)
-            ? SmallNumbers[(int)number]
+        number >= MIN_SMALL && number <= MAX_SMALL && number == MathF.Truncate(number) && !(number == 0.0f && float.IsNegative(number))
+            ? SmallNumbers[(int)number - MIN_SMALL]
             : null;
 
     /// <summary>
